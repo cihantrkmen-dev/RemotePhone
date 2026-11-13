@@ -73,8 +73,8 @@ jobs:
                       applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 8
-                      versionName = "2.4.0"
+                      versionCode = 9
+                      versionName = "2.4.1"
                   }
 
                   buildTypes {
@@ -258,6 +258,7 @@ jobs:
 
                   private val listeners = CopyOnWriteArraySet<Listener>()
                   private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+                  private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
                   private var serverSocket: ServerSocket? = null
                   private var currentSocket: Socket? = null
                   private var writer: PrintWriter? = null
@@ -378,15 +379,15 @@ jobs:
                       }
                   }
 
-                  private suspend fun notifyEvent(event: String, data: String) {
-                      withContext(Dispatchers.Main) {
+                  private fun notifyEvent(event: String, data: String) {
+                      mainScope.launch {
                           for (listener in listeners) listener.onEvent(event, data)
                       }
                   }
 
-                  private suspend fun notifyConnection(connected: Boolean) {
+                  private fun notifyConnection(connected: Boolean) {
                       isConnected = connected
-                      withContext(Dispatchers.Main) {
+                      mainScope.launch {
                           for (listener in listeners) listener.onConnectionChanged(connected)
                       }
                   }
@@ -911,6 +912,7 @@ jobs:
                       super.onDestroy()
                   }
 
+                  @SuppressLint("MissingPermission")
                   override fun onEvent(event: String, data: String) {
                       when (event) {
                           "ANSWER" -> {
@@ -920,7 +922,10 @@ jobs:
                               if (isOutgoingBridgeMode) {
                                   hangupAllCalls()
                               } else {
-                                  silenceRinger()
+                                  try {
+                                      val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+                                      tm.silenceRinger()
+                                  } catch (_: Exception) {}
                               }
                           }
                           "DIAL" -> {
@@ -1274,6 +1279,7 @@ jobs:
                       ActivityResultContracts.RequestMultiplePermissions()
                   ) { }
 
+                  @SuppressLint("MissingPermission")
                   override fun onCreate(savedInstanceState: Bundle?) {
                       super.onCreate(savedInstanceState)
                       setContentView(R.layout.activity_main)
@@ -1354,7 +1360,6 @@ jobs:
                           tvConnectionStatus.text = "● S25 Ultra (Uzak Ahize) - Bağlanıyor..."
                       }
 
-                      @SuppressLint("MissingPermission")
                       findViewById<Button>(R.id.btnMakeCall).setOnClickListener {
                           val targetNumber = etDialNumber.text.toString().trim()
                           if (targetNumber.isEmpty()) {
@@ -2015,5 +2020,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v2.4.0-APK
+          name: RemotePhone-v2.4.1-APK
           path: app/build/outputs/apk/debug/app-debug.apk
