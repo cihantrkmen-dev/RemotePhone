@@ -20,11 +20,13 @@ jobs:
           import os, textwrap
 
           def write_file(path, content):
-              os.makedirs(os.path.dirname(path), exist_ok=True)
+              d = os.path.dirname(path)
+              if d:
+                  os.makedirs(d, exist_ok=True)
               with open(path, "w", encoding="utf-8") as f:
                   f.write(textwrap.dedent(content).lstrip())
 
-          write_file("settings.gradle.kts", """
+          write_file("settings.gradle.kts", r"""
               pluginManagement {
                   repositories {
                       google()
@@ -43,21 +45,21 @@ jobs:
               include(":app")
           """)
 
-          write_file("build.gradle.kts", """
+          write_file("build.gradle.kts", r"""
               plugins {
                   id("com.android.application") version "8.5.2" apply false
                   id("org.jetbrains.kotlin.android") version "1.9.24" apply false
               }
           """)
 
-          write_file("gradle.properties", """
+          write_file("gradle.properties", r"""
               org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
               android.useAndroidX=true
               kotlin.code.style=official
               android.nonTransitiveRClass=true
           """)
 
-          write_file("app/build.gradle.kts", """
+          write_file("app/build.gradle.kts", r"""
               plugins {
                   id("com.android.application")
                   id("org.jetbrains.kotlin.android")
@@ -71,8 +73,8 @@ jobs:
                       applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 6
-                      versionName = "2.3.0"
+                      versionCode = 7
+                      versionName = "2.3.1"
                   }
 
                   buildTypes {
@@ -98,7 +100,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/AndroidManifest.xml", """
+          write_file("app/src/main/AndroidManifest.xml", r"""
               <?xml version="1.0" encoding="utf-8"?>
               <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -188,7 +190,7 @@ jobs:
               </manifest>
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/ContactHelper.kt", """
+          write_file("app/src/main/java/com/example/remotephone/ContactHelper.kt", r"""
               package com.example.remotephone
 
               import android.Manifest
@@ -230,7 +232,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/HotspotLanBridge.kt", """
+          write_file("app/src/main/java/com/example/remotephone/HotspotLanBridge.kt", r"""
               package com.example.remotephone
 
               import android.content.Context
@@ -404,7 +406,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/SipAudioEngine.kt", """
+          write_file("app/src/main/java/com/example/remotephone/SipAudioEngine.kt", r"""
               package com.example.remotephone
 
               import android.annotation.SuppressLint
@@ -463,20 +465,19 @@ jobs:
 
                               fun buildRegister(authHeader: String = ""): String {
                                   val branch = "z9hG4bK" + UUID.randomUUID().toString().take(8)
-                                  return "REGISTER sip:$sipDomain SIP/2.0\\r\\n" +
-                                      "Via: SIP/2.0/UDP 0.0.0.0:${socket.localPort};rport;branch=$branch\\r\\n" +
-                                      "Max-Forwards: 70\\r\\n" +
-                                      "From: <sip:$sipUsername@$sipDomain>;tag=remphone\\r\\n" +
-                                      "To: <sip:$sipUsername@$sipDomain>\\r\\n" +
-                                      "Call-ID: $callId\\r\\n" +
-                                      "CSeq: ${cseq++} REGISTER\\r\\n" +
-                                      "Contact: <sip:$sipUsername@0.0.0.0:${socket.localPort}>\\r\\n" +
-                                      "Expires: 300\\r\\n" +
+                                  return "REGISTER sip:$sipDomain SIP/2.0\r\n" +
+                                      "Via: SIP/2.0/UDP 0.0.0.0:${socket.localPort};rport;branch=$branch\r\n" +
+                                      "Max-Forwards: 70\r\n" +
+                                      "From: <sip:$sipUsername@$sipDomain>;tag=remphone\r\n" +
+                                      "To: <sip:$sipUsername@$sipDomain>\r\n" +
+                                      "Call-ID: $callId\r\n" +
+                                      "CSeq: ${cseq++} REGISTER\r\n" +
+                                      "Contact: <sip:$sipUsername@0.0.0.0:${socket.localPort}>\r\n" +
+                                      "Expires: 300\r\n" +
                                       authHeader +
-                                      "Content-Length: 0\\r\\n\\r\\n"
+                                      "Content-Length: 0\r\n\r\n"
                               }
 
-                              // Periyodik SIP Register
                               launch {
                                   while (isActive) {
                                       try { sendSip(buildRegister()) } catch (_: Exception) {}
@@ -491,13 +492,13 @@ jobs:
                                   val text = String(packet.data, 0, packet.length)
 
                                   if (text.startsWith("SIP/2.0 401") || text.startsWith("SIP/2.0 407")) {
-                                      val realm = Regex("realm=\\"([^\\"]+)\\"").find(text)?.groupValues?.get(1) ?: sipDomain
-                                      val nonce = Regex("nonce=\\"([^\\"]+)\\"").find(text)?.groupValues?.get(1) ?: ""
+                                      val realm = Regex("realm=\"([^\"]+)\"").find(text)?.groupValues?.get(1) ?: sipDomain
+                                      val nonce = Regex("nonce=\"([^\"]+)\"").find(text)?.groupValues?.get(1) ?: ""
                                       val ha1 = md5("$sipUsername:$realm:$sipPassword")
                                       val ha2 = md5("REGISTER:sip:$sipDomain")
                                       val resp = md5("$ha1:$nonce:$ha2")
                                       val hdrName = if (text.startsWith("SIP/2.0 407")) "Proxy-Authorization" else "Authorization"
-                                      val auth = "$hdrName: Digest username=\\"$sipUsername\\", realm=\\"$realm\\", nonce=\\"$nonce\\", uri=\\"sip:$sipDomain\\", response=\\"$resp\\", algorithm=MD5\\r\\n"
+                                      val auth = "$hdrName: Digest username=\"$sipUsername\", realm=\"$realm\", nonce=\"$nonce\", uri=\"sip:$sipDomain\", response=\"$resp\", algorithm=MD5\r\n"
                                       sendSip(buildRegister(auth))
                                   } else if (text.startsWith("INVITE ")) {
                                       if (awaitingAutoAnswer) {
@@ -508,15 +509,15 @@ jobs:
                                           val cid = text.lines().firstOrNull { it.startsWith("Call-ID:", true) } ?: ""
                                           val cs = text.lines().firstOrNull { it.startsWith("CSeq:", true) } ?: ""
 
-                                          val remoteRtpPort = Regex("m=audio (\\\\d+)").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 10000
-                                          val remoteRtpIp = Regex("c=IN IP4 ([0-9.]+)").find(text)?.groupValues?.get(1) ?: serverIp.hostAddress
+                                          val remoteRtpPort = Regex("m=audio (\\d+)").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 10000
+                                          val remoteRtpIp = Regex("c=IN IP4 ([0-9.]+)").find(text)?.groupValues?.get(1) ?: (serverIp.hostAddress ?: "127.0.0.1")
 
                                           rtpSocket?.close()
                                           val rtp = DatagramSocket()
                                           rtpSocket = rtp
 
-                                          val sdp = "v=0\\r\\no=- 1 1 IN IP4 0.0.0.0\\r\\ns=-\\r\\nc=IN IP4 0.0.0.0\\r\\nt=0 0\\r\\nm=audio ${rtp.localPort} RTP/AVP 8 0\\r\\na=rtpmap:8 PCMA/8000\\r\\na=rtpmap:0 PCMU/8000\\r\\n"
-                                          val ok = "SIP/2.0 200 OK\\r\\n$via\\r\\n$from\\r\\n$to;tag=srv1\\r\\n$cid\\r\\n$cs\\r\\nContent-Type: application/sdp\\r\\nContent-Length: ${sdp.length}\\r\\n\\r\\n$sdp"
+                                          val sdp = "v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\ns=-\r\nc=IN IP4 0.0.0.0\r\nt=0 0\r\nm=audio ${rtp.localPort} RTP/AVP 8 0\r\na=rtpmap:8 PCMA/8000\r\na=rtpmap:0 PCMU/8000\r\n"
+                                          val ok = "SIP/2.0 200 OK\r\n$via\r\n$from\r\n$to;tag=srv1\r\n$cid\r\n$cs\r\nContent-Type: application/sdp\r\nContent-Length: ${sdp.length}\r\n\r\n$sdp"
                                           sendSip(ok)
                                           startRtpAudioStream(rtp, InetAddress.getByName(remoteRtpIp), remoteRtpPort)
                                           onCallConnected?.invoke()
@@ -547,7 +548,6 @@ jobs:
                           recorder.startRecording()
                           player.play()
 
-                          // Giden Ses (Mikrofon -> PCMA RTP)
                           launch {
                               var seq = 0
                               var ts = 0
@@ -557,7 +557,7 @@ jobs:
                                   val read = recorder.read(pcmBuf, 0, 160)
                                   if (read > 0 && !isMicMuted) {
                                       rtpBuf[0] = 0x80.toByte()
-                                      rtpBuf[1] = 8.toByte() // PCMA
+                                      rtpBuf[1] = 8.toByte()
                                       rtpBuf[2] = (seq shr 8).toByte()
                                       rtpBuf[3] = seq.toByte()
                                       rtpBuf[4] = (ts shr 24).toByte()
@@ -574,7 +574,6 @@ jobs:
                               }
                           }
 
-                          // Gelen Ses (PCMA RTP -> Ahize/Hoparlör)
                           try {
                               val inBuf = ByteArray(512)
                               val outPcm = ShortArray(160)
@@ -660,7 +659,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt", """
+          write_file("app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt", r"""
               package com.example.remotephone
 
               import android.app.Notification
@@ -843,7 +842,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/HostInCallService.kt", """
+          write_file("app/src/main/java/com/example/remotephone/HostInCallService.kt", r"""
               package com.example.remotephone
 
               import android.annotation.SuppressLint
@@ -1003,14 +1002,14 @@ jobs:
                   @SuppressLint("MissingPermission")
                   fun configureForwarding(context: Context, sipNumber: String, enable: Boolean) {
                       sipBridgeDidNumber = sipNumber
-                      val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+                      val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
                       val ussd = if (enable) "*67*$sipNumber#" else "#67#"
                       tm.placeCall(Uri.parse("tel:" + Uri.encode(ussd)), Bundle())
                   }
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/RemoteCallActivity.kt", """
+          write_file("app/src/main/java/com/example/remotephone/RemoteCallActivity.kt", r"""
               package com.example.remotephone
 
               import android.app.NotificationManager
@@ -1198,7 +1197,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/MainActivity.kt", """
+          write_file("app/src/main/java/com/example/remotephone/MainActivity.kt", r"""
               package com.example.remotephone
 
               import android.Manifest
@@ -1478,7 +1477,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/res/layout/activity_main.xml", """
+          write_file("app/src/main/res/layout/activity_main.xml", r"""
               <?xml version="1.0" encoding="utf-8"?>
               <androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
                   xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -1820,7 +1819,7 @@ jobs:
               </androidx.coordinatorlayout.widget.CoordinatorLayout>
           """)
 
-          write_file("app/src/main/res/layout/activity_remote_call.xml", """
+          write_file("app/src/main/res/layout/activity_remote_call.xml", r"""
               <?xml version="1.0" encoding="utf-8"?>
               <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
                   xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -1985,5 +1984,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v2.3.0-APK
+          name: RemotePhone-v2.3.1-APK
           path: app/build/outputs/apk/debug/app-debug.apk
