@@ -19,7 +19,7 @@ jobs:
           mkdir -p app/src/main/java/com/example/remotephone
           mkdir -p app/src/main/res/layout
 
-          cat << 'EOF' > settings.gradle.kts
+          cat << 'EOF' | sed 's/^          //' > settings.gradle.kts
           pluginManagement {
               repositories {
                   google()
@@ -32,28 +32,28 @@ jobs:
               repositories {
                   google()
                   mavenCentral()
-                  maven { url = uri("https://linphone.org/maven_repository") }
+                  maven { url = uri("https://download.linphone.org/maven_repository/") }
               }
           }
           rootProject.name = "RemotePhone"
           include(":app")
           EOF
 
-          cat << 'EOF' > build.gradle.kts
+          cat << 'EOF' | sed 's/^          //' > build.gradle.kts
           plugins {
-              id("com.android.application") version "8.6.1" apply false
-              id("org.jetbrains.kotlin.android") version "2.0.20" apply false
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
           }
           EOF
 
-          cat << 'EOF' > gradle.properties
+          cat << 'EOF' | sed 's/^          //' > gradle.properties
           org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
           android.useAndroidX=true
           kotlin.code.style=official
           android.nonTransitiveRClass=true
           EOF
 
-          cat << 'EOF' > app/build.gradle.kts
+          cat << 'EOF' | sed 's/^          //' > app/build.gradle.kts
           plugins {
               id("com.android.application")
               id("org.jetbrains.kotlin.android")
@@ -67,8 +67,8 @@ jobs:
                   applicationId = "com.example.remotephone"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 4
-                  versionName = "2.2.0"
+                  versionCode = 5
+                  versionName = "2.2.1"
 
                   ndk {
                       abiFilters += listOf("arm64-v8a")
@@ -88,6 +88,11 @@ jobs:
               kotlinOptions {
                   jvmTarget = "17"
               }
+              packaging {
+                  jniLibs {
+                      useLegacyPackaging = true
+                  }
+              }
           }
 
           dependencies {
@@ -99,7 +104,7 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          cat << 'EOF' | sed 's/^          //' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -189,7 +194,7 @@ jobs:
           </manifest>
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/example/remotephone/ContactHelper.kt
+          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/ContactHelper.kt
           package com.example.remotephone
 
           import android.Manifest
@@ -231,7 +236,7 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/example/remotephone/HotspotLanBridge.kt
+          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/HotspotLanBridge.kt
           package com.example.remotephone
 
           import android.content.Context
@@ -405,7 +410,7 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/example/remotephone/SipAudioEngine.kt
+          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/SipAudioEngine.kt
           package com.example.remotephone
 
           import android.content.Context
@@ -513,7 +518,7 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt
+          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt
           package com.example.remotephone
 
           import android.app.Notification
@@ -696,13 +701,14 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/example/remotephone/HostInCallService.kt
+          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/HostInCallService.kt
           package com.example.remotephone
 
           import android.annotation.SuppressLint
           import android.content.Context
           import android.content.Intent
           import android.net.Uri
+          import android.os.Bundle
           import android.telecom.Call
           import android.telecom.CallAudioState
           import android.telecom.InCallService
@@ -763,13 +769,13 @@ jobs:
                   sipBridgeCall = null
 
                   val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                  tm.placeCall(Uri.parse("tel:" + Uri.encode(targetNumber)), null)
+                  tm.placeCall(Uri.parse("tel:" + Uri.encode(targetNumber)), Bundle())
               }
 
               @SuppressLint("MissingPermission")
               private fun dialSipBridgeNumber() {
                   val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                  tm.placeCall(Uri.parse("tel:" + Uri.encode(sipBridgeDidNumber)), null)
+                  tm.placeCall(Uri.parse("tel:" + Uri.encode(sipBridgeDidNumber)), Bundle())
               }
 
               override fun onCallAdded(call: Call) {
@@ -857,12 +863,12 @@ jobs:
                   sipBridgeDidNumber = sipNumber
                   val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
                   val ussd = if (enable) "*67*$sipNumber#" else "#67#"
-                  tm.placeCall(Uri.parse("tel:" + Uri.encode(ussd)), null)
+                  tm.placeCall(Uri.parse("tel:" + Uri.encode(ussd)), Bundle())
               }
           }
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/example/remotephone/RemoteCallActivity.kt
+          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/RemoteCallActivity.kt
           package com.example.remotephone
 
           import android.app.NotificationManager
@@ -1050,7 +1056,7 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/example/remotephone/MainActivity.kt
+          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/MainActivity.kt
           package com.example.remotephone
 
           import android.Manifest
@@ -1187,7 +1193,7 @@ jobs:
                       val currentMode = prefs.getString("saved_mode", "CLIENT")
                       if (currentMode == "HOST" && !HotspotLanBridge.isConnected) {
                           val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                          tm.placeCall(Uri.parse("tel:" + Uri.encode(targetNumber)), null)
+                          tm.placeCall(Uri.parse("tel:" + Uri.encode(targetNumber)), Bundle())
                           val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
                               putExtra("CALLER_NUMBER", targetNumber)
                               putExtra("IS_OUTGOING", true)
@@ -1330,7 +1336,7 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > app/src/main/res/layout/activity_main.xml
+          cat << 'EOF' | sed 's/^          //' > app/src/main/res/layout/activity_main.xml
           <?xml version="1.0" encoding="utf-8"?>
           <androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -1672,7 +1678,7 @@ jobs:
           </androidx.coordinatorlayout.widget.CoordinatorLayout>
           EOF
 
-          cat << 'EOF' > app/src/main/res/layout/activity_remote_call.xml
+          cat << 'EOF' | sed 's/^          //' > app/src/main/res/layout/activity_remote_call.xml
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -1832,10 +1838,10 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build Debug APK
-        run: gradle assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v2.2.0-APK
+          name: RemotePhone-v2.2.1-APK
           path: app/build/outputs/apk/debug/app-debug.apk
