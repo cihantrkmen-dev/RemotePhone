@@ -14,1456 +14,1878 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Generate Full Android Project Structure
+      - name: Generate Full Android Project Structure via Python
+        shell: python3 {0}
         run: |
-          mkdir -p app/src/main/java/com/example/remotephone
-          mkdir -p app/src/main/res/layout
+          import os, textwrap
 
-          cat << 'EOF' | sed 's/^          //' > settings.gradle.kts
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-                  maven { url = uri("https://download.linphone.org/maven_repository/") }
-              }
-          }
-          rootProject.name = "RemotePhone"
-          include(":app")
-          EOF
+          def write_file(path, content):
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(textwrap.dedent(content).lstrip())
 
-          cat << 'EOF' | sed 's/^          //' > build.gradle.kts
-          plugins {
-              id("com.android.application") version "8.5.2" apply false
-              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
-          }
-          EOF
-
-          cat << 'EOF' | sed 's/^          //' > gradle.properties
-          org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
-          android.useAndroidX=true
-          kotlin.code.style=official
-          android.nonTransitiveRClass=true
-          EOF
-
-          cat << 'EOF' | sed 's/^          //' > app/build.gradle.kts
-          plugins {
-              id("com.android.application")
-              id("org.jetbrains.kotlin.android")
-          }
-
-          android {
-              namespace = "com.example.remotephone"
-              compileSdk = 34
-
-              defaultConfig {
-                  applicationId = "com.example.remotephone"
-                  minSdk = 26
-                  targetSdk = 34
-                  versionCode = 5
-                  versionName = "2.2.1"
-
-                  ndk {
-                      abiFilters += listOf("arm64-v8a")
+          write_file("settings.gradle.kts", """
+              pluginManagement {
+                  repositories {
+                      google()
+                      mavenCentral()
+                      gradlePluginPortal()
                   }
               }
-
-              buildTypes {
-                  release {
-                      isMinifyEnabled = false
+              dependencyResolutionManagement {
+                  repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+                  repositories {
+                      google()
+                      mavenCentral()
                   }
               }
+              rootProject.name = "RemotePhone"
+              include(":app")
+          """)
 
-              compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
+          write_file("build.gradle.kts", """
+              plugins {
+                  id("com.android.application") version "8.5.2" apply false
+                  id("org.jetbrains.kotlin.android") version "1.9.24" apply false
               }
-              kotlinOptions {
-                  jvmTarget = "17"
+          """)
+
+          write_file("gradle.properties", """
+              org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
+              android.useAndroidX=true
+              kotlin.code.style=official
+              android.nonTransitiveRClass=true
+          """)
+
+          write_file("app/build.gradle.kts", """
+              plugins {
+                  id("com.android.application")
+                  id("org.jetbrains.kotlin.android")
               }
-              packaging {
-                  jniLibs {
-                      useLegacyPackaging = true
+
+              android {
+                  namespace = "com.example.remotephone"
+                  compileSdk = 34
+
+                  defaultConfig {
+                      applicationId = "com.example.remotephone"
+                      minSdk = 26
+                      targetSdk = 34
+                      versionCode = 6
+                      versionName = "2.3.0"
                   }
-              }
-          }
 
-          dependencies {
-              implementation("androidx.core:core-ktx:1.13.1")
-              implementation("androidx.appcompat:appcompat:1.7.0")
-              implementation("com.google.android.material:material:1.12.0")
-              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-              implementation("org.linphone:linphone-sdk-android:5.3.18")
-          }
-          EOF
-
-          cat << 'EOF' | sed 's/^          //' > app/src/main/AndroidManifest.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-              <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-              <uses-permission android:name="android.permission.CALL_PHONE" />
-              <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
-              <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
-              <uses-permission android:name="android.permission.READ_CONTACTS" />
-              <uses-permission android:name="android.permission.RECORD_AUDIO" />
-              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-
-              <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-
-              <uses-permission android:name="android.permission.WAKE_LOCK" />
-              <uses-permission android:name="android.permission.VIBRATE" />
-              <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-              <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-              <application
-                  android:allowBackup="true"
-                  android:label="Telefon"
-                  android:supportsRtl="true"
-                  android:theme="@style/Theme.Material3.DayNight.NoActionBar">
-
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:windowSoftInputMode="stateAlwaysHidden">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                      <intent-filter>
-                          <action android:name="android.intent.action.DIAL" />
-                          <category android:name="android.intent.category.DEFAULT" />
-                      </intent-filter>
-                      <intent-filter>
-                          <action android:name="android.intent.action.DIAL" />
-                          <category android:name="android.intent.category.DEFAULT" />
-                          <data android:scheme="tel" />
-                      </intent-filter>
-                      <intent-filter>
-                          <action android:name="android.intent.action.VIEW" />
-                          <category android:name="android.intent.category.DEFAULT" />
-                          <category android:name="android.intent.category.BROWSABLE" />
-                          <data android:scheme="tel" />
-                      </intent-filter>
-                  </activity>
-
-                  <activity
-                      android:name=".RemoteCallActivity"
-                      android:exported="false"
-                      android:launchMode="singleTop"
-                      android:showWhenLocked="true"
-                      android:turnScreenOn="true" />
-
-                  <service
-                      android:name=".HostInCallService"
-                      android:exported="true"
-                      android:permission="android.permission.BIND_INCALL_SERVICE">
-                      <meta-data
-                          android:name="android.telecom.IN_CALL_SERVICE_UI"
-                          android:value="true" />
-                      <meta-data
-                          android:name="android.telecom.IN_CALL_SERVICE_RINGING"
-                          android:value="true" />
-                      <intent-filter>
-                          <action android:name="android.telecom.InCallService" />
-                      </intent-filter>
-                  </service>
-
-                  <service
-                      android:name=".BridgeKeepAliveService"
-                      android:exported="false"
-                      android:foregroundServiceType="specialUse">
-                      <property
-                          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                          android:value="Continuous local Wi-Fi Hotspot call signaling and SIP bridge between Note 10 Lite and S25 Ultra" />
-                  </service>
-
-              </application>
-          </manifest>
-          EOF
-
-          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/ContactHelper.kt
-          package com.example.remotephone
-
-          import android.Manifest
-          import android.content.Context
-          import android.content.pm.PackageManager
-          import android.net.Uri
-          import android.provider.ContactsContract
-          import androidx.core.content.ContextCompat
-
-          object ContactHelper {
-              fun getContactName(context: Context, phoneNumber: String): String? {
-                  val cleanNumber = phoneNumber.trim()
-                  if (cleanNumber.isEmpty()) return null
-                  if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS)
-                      != PackageManager.PERMISSION_GRANTED
-                  ) return null
-
-                  return try {
-                      val uri = Uri.withAppendedPath(
-                          ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-                          Uri.encode(cleanNumber)
-                      )
-                      val projection = arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME)
-                      context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                          if (cursor.moveToFirst()) cursor.getString(0) else null
+                  buildTypes {
+                      release {
+                          isMinifyEnabled = false
                       }
-                  } catch (_: Exception) {
-                      null
+                  }
+
+                  compileOptions {
+                      sourceCompatibility = JavaVersion.VERSION_17
+                      targetCompatibility = JavaVersion.VERSION_17
+                  }
+                  kotlinOptions {
+                      jvmTarget = "17"
                   }
               }
 
-              fun resolveCallerInfo(context: Context, payload: String): Pair<String, String?> {
-                  val parts = payload.split("~", limit = 2)
-                  val rawNumber = parts[0].ifBlank { "Bilinmeyen Numara" }
-                  val hostName = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
-                  val localName = getContactName(context, rawNumber)
-                  return Pair(rawNumber, localName ?: hostName)
+              dependencies {
+                  implementation("androidx.core:core-ktx:1.13.1")
+                  implementation("androidx.appcompat:appcompat:1.7.0")
+                  implementation("com.google.android.material:material:1.12.0")
+                  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
               }
-          }
-          EOF
+          """)
 
-          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/HotspotLanBridge.kt
-          package com.example.remotephone
+          write_file("app/src/main/AndroidManifest.xml", """
+              <?xml version="1.0" encoding="utf-8"?>
+              <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-          import android.content.Context
-          import android.net.ConnectivityManager
-          import android.net.LinkProperties
-          import kotlinx.coroutines.*
-          import java.io.BufferedReader
-          import java.io.InputStreamReader
-          import java.io.PrintWriter
-          import java.net.ServerSocket
-          import java.net.Socket
-          import java.util.concurrent.CopyOnWriteArraySet
+                  <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+                  <uses-permission android:name="android.permission.CALL_PHONE" />
+                  <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+                  <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+                  <uses-permission android:name="android.permission.READ_CONTACTS" />
+                  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+                  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
-          object HotspotLanBridge {
-              private const val PORT = 8989
-              private const val SOCKET_TIMEOUT_MS = 12_000
-              private const val HEARTBEAT_INTERVAL_MS = 5_000L
+                  <uses-permission android:name="android.permission.INTERNET" />
+                  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+                  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
-              interface Listener {
-                  fun onEvent(event: String, data: String) {}
-                  fun onConnectionChanged(connected: Boolean) {}
+                  <uses-permission android:name="android.permission.WAKE_LOCK" />
+                  <uses-permission android:name="android.permission.VIBRATE" />
+                  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+                  <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+                  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+                  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+                  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+                  <application
+                      android:allowBackup="true"
+                      android:label="Telefon"
+                      android:supportsRtl="true"
+                      android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+
+                      <activity
+                          android:name=".MainActivity"
+                          android:exported="true"
+                          android:windowSoftInputMode="stateAlwaysHidden">
+                          <intent-filter>
+                              <action android:name="android.intent.action.MAIN" />
+                              <category android:name="android.intent.category.LAUNCHER" />
+                          </intent-filter>
+                          <intent-filter>
+                              <action android:name="android.intent.action.DIAL" />
+                              <category android:name="android.intent.category.DEFAULT" />
+                          </intent-filter>
+                          <intent-filter>
+                              <action android:name="android.intent.action.DIAL" />
+                              <category android:name="android.intent.category.DEFAULT" />
+                              <data android:scheme="tel" />
+                          </intent-filter>
+                          <intent-filter>
+                              <action android:name="android.intent.action.VIEW" />
+                              <category android:name="android.intent.category.DEFAULT" />
+                              <category android:name="android.intent.category.BROWSABLE" />
+                              <data android:scheme="tel" />
+                          </intent-filter>
+                      </activity>
+
+                      <activity
+                          android:name=".RemoteCallActivity"
+                          android:exported="false"
+                          android:launchMode="singleTop"
+                          android:showWhenLocked="true"
+                          android:turnScreenOn="true" />
+
+                      <service
+                          android:name=".HostInCallService"
+                          android:exported="true"
+                          android:permission="android.permission.BIND_INCALL_SERVICE">
+                          <meta-data
+                              android:name="android.telecom.IN_CALL_SERVICE_UI"
+                              android:value="true" />
+                          <meta-data
+                              android:name="android.telecom.IN_CALL_SERVICE_RINGING"
+                              android:value="true" />
+                          <intent-filter>
+                              <action android:name="android.telecom.InCallService" />
+                          </intent-filter>
+                      </service>
+
+                      <service
+                          android:name=".BridgeKeepAliveService"
+                          android:exported="false"
+                          android:foregroundServiceType="specialUse">
+                          <property
+                              android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                              android:value="Continuous local Wi-Fi Hotspot call signaling and SIP bridge" />
+                      </service>
+
+                  </application>
+              </manifest>
+          """)
+
+          write_file("app/src/main/java/com/example/remotephone/ContactHelper.kt", """
+              package com.example.remotephone
+
+              import android.Manifest
+              import android.content.Context
+              import android.content.pm.PackageManager
+              import android.net.Uri
+              import android.provider.ContactsContract
+              import androidx.core.content.ContextCompat
+
+              object ContactHelper {
+                  fun getContactName(context: Context, phoneNumber: String): String? {
+                      val cleanNumber = phoneNumber.trim()
+                      if (cleanNumber.isEmpty()) return null
+                      if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS)
+                          != PackageManager.PERMISSION_GRANTED
+                      ) return null
+
+                      return try {
+                          val uri = Uri.withAppendedPath(
+                              ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                              Uri.encode(cleanNumber)
+                          )
+                          val projection = arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME)
+                          context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                              if (cursor.moveToFirst()) cursor.getString(0) else null
+                          }
+                      } catch (_: Exception) {
+                          null
+                      }
+                  }
+
+                  fun resolveCallerInfo(context: Context, payload: String): Pair<String, String?> {
+                      val parts = payload.split("~", limit = 2)
+                      val rawNumber = parts[0].ifBlank { "Bilinmeyen Numara" }
+                      val hostName = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
+                      val localName = getContactName(context, rawNumber)
+                      return Pair(rawNumber, localName ?: hostName)
+                  }
               }
+          """)
 
-              private val listeners = CopyOnWriteArraySet<Listener>()
-              private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-              private var serverSocket: ServerSocket? = null
-              private var currentSocket: Socket? = null
-              private var writer: PrintWriter? = null
-              private var activeJob: Job? = null
+          write_file("app/src/main/java/com/example/remotephone/HotspotLanBridge.kt", """
+              package com.example.remotephone
 
-              @Volatile
-              var isConnected: Boolean = false
-                  private set
+              import android.content.Context
+              import android.net.ConnectivityManager
+              import android.net.LinkProperties
+              import kotlinx.coroutines.*
+              import java.io.BufferedReader
+              import java.io.InputStreamReader
+              import java.io.PrintWriter
+              import java.net.ServerSocket
+              import java.net.Socket
+              import java.util.concurrent.CopyOnWriteArraySet
 
-              fun addListener(listener: Listener) {
-                  listeners.add(listener)
-                  listener.onConnectionChanged(isConnected)
-              }
+              object HotspotLanBridge {
+                  private const val PORT = 8989
+                  private const val SOCKET_TIMEOUT_MS = 12_000
+                  private const val HEARTBEAT_INTERVAL_MS = 5_000L
 
-              fun removeListener(listener: Listener) {
-                  listeners.remove(listener)
-              }
+                  interface Listener {
+                      fun onEvent(event: String, data: String) {}
+                      fun onConnectionChanged(connected: Boolean) {}
+                  }
 
-              fun startHostServer() {
-                  stop()
-                  activeJob = scope.launch {
-                      while (isActive) {
-                          try {
-                              serverSocket = ServerSocket(PORT).apply { reuseAddress = true }
-                              while (isActive) {
-                                  val client = serverSocket!!.accept()
-                                  handleSocket(client)
+                  private val listeners = CopyOnWriteArraySet<Listener>()
+                  private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+                  private var serverSocket: ServerSocket? = null
+                  private var currentSocket: Socket? = null
+                  private var writer: PrintWriter? = null
+                  private var activeJob: Job? = null
+
+                  @Volatile
+                  var isConnected: Boolean = false
+                      private set
+
+                  fun addListener(listener: Listener) {
+                      listeners.add(listener)
+                      listener.onConnectionChanged(isConnected)
+                  }
+
+                  fun removeListener(listener: Listener) {
+                      listeners.remove(listener)
+                  }
+
+                  fun startHostServer() {
+                      stop()
+                      activeJob = scope.launch {
+                          while (isActive) {
+                              try {
+                                  serverSocket = ServerSocket(PORT).apply { reuseAddress = true }
+                                  while (isActive) {
+                                      val client = serverSocket!!.accept()
+                                      handleSocket(client)
+                                  }
+                              } catch (_: Exception) {
+                                  delay(1500)
+                              } finally {
+                                  try { serverSocket?.close() } catch (_: Exception) {}
                               }
-                          } catch (_: Exception) {
-                              delay(1500)
-                          } finally {
-                              try { serverSocket?.close() } catch (_: Exception) {}
                           }
                       }
                   }
-              }
 
-              fun startClientAutoConnect(context: Context) {
-                  stop()
-                  val appCtx = context.applicationContext
-                  activeJob = scope.launch {
-                      while (isActive) {
-                          try {
-                              val hostIp = getHotspotGatewayIp(appCtx)
-                              if (!hostIp.isNullOrEmpty()) {
-                                  val socket = Socket(hostIp, PORT)
-                                  handleSocket(socket)
+                  fun startClientAutoConnect(context: Context) {
+                      stop()
+                      val appCtx = context.applicationContext
+                      activeJob = scope.launch {
+                          while (isActive) {
+                              try {
+                                  val hostIp = getHotspotGatewayIp(appCtx)
+                                  if (!hostIp.isNullOrEmpty()) {
+                                      val socket = Socket(hostIp, PORT)
+                                      handleSocket(socket)
+                                  }
+                              } catch (_: Exception) {
+                                  notifyConnection(false)
                               }
-                          } catch (_: Exception) {
-                              notifyConnection(false)
+                              delay(2000)
                           }
-                          delay(2000)
                       }
                   }
-              }
 
-              fun stop() {
-                  activeJob?.cancel()
-                  try { currentSocket?.close() } catch (_: Exception) {}
-                  try { serverSocket?.close() } catch (_: Exception) {}
-                  notifyConnection(false)
-              }
+                  fun stop() {
+                      activeJob?.cancel()
+                      try { currentSocket?.close() } catch (_: Exception) {}
+                      try { serverSocket?.close() } catch (_: Exception) {}
+                      notifyConnection(false)
+                  }
 
-              private suspend fun handleSocket(socket: Socket) {
-                  try { currentSocket?.close() } catch (_: Exception) {}
-                  currentSocket = socket
-                  socket.keepAlive = true
-                  socket.tcpNoDelay = true
-                  socket.soTimeout = SOCKET_TIMEOUT_MS
+                  private suspend fun handleSocket(socket: Socket) {
+                      try { currentSocket?.close() } catch (_: Exception) {}
+                      currentSocket = socket
+                      socket.keepAlive = true
+                      socket.tcpNoDelay = true
+                      socket.soTimeout = SOCKET_TIMEOUT_MS
 
-                  writer = PrintWriter(socket.getOutputStream(), true)
-                  val reader = BufferedReader(InputStreamReader(socket.inputStream))
-                  notifyConnection(true)
+                      writer = PrintWriter(socket.getOutputStream(), true)
+                      val reader = BufferedReader(InputStreamReader(socket.inputStream))
+                      notifyConnection(true)
 
-                  val heartbeatJob = scope.launch {
-                      while (isActive && !socket.isClosed) {
-                          try {
-                              writer?.println("PING|")
-                              if (writer?.checkError() == true) {
+                      val heartbeatJob = scope.launch {
+                          while (isActive && !socket.isClosed) {
+                              try {
+                                  writer?.println("PING|")
+                                  if (writer?.checkError() == true) {
+                                      socket.close()
+                                      break
+                                  }
+                              } catch (_: Exception) {
                                   socket.close()
                                   break
                               }
-                          } catch (_: Exception) {
-                              socket.close()
-                              break
-                          }
-                          delay(HEARTBEAT_INTERVAL_MS)
-                      }
-                  }
-
-                  try {
-                      while (!socket.isClosed) {
-                          val line = reader.readLine() ?: break
-                          val parts = line.split("|", limit = 2)
-                          val event = parts[0]
-                          val data = parts.getOrElse(1) { "" }
-
-                          when (event) {
-                              "PING" -> writer?.println("PONG|")
-                              "PONG" -> {}
-                              else -> notifyEvent(event, data)
+                              delay(HEARTBEAT_INTERVAL_MS)
                           }
                       }
-                  } catch (_: Exception) {
-                  } finally {
-                      heartbeatJob.cancel()
-                      writer = null
-                      try { socket.close() } catch (_: Exception) {}
-                      notifyConnection(false)
-                  }
-              }
 
-              fun send(event: String, data: String = "") {
-                  scope.launch {
                       try {
-                          writer?.println("$event|$data")
-                      } catch (_: Exception) {}
-                  }
-              }
+                          while (!socket.isClosed) {
+                              val line = reader.readLine() ?: break
+                              val parts = line.split("|", limit = 2)
+                              val event = parts[0]
+                              val data = parts.getOrElse(1) { "" }
 
-              private suspend fun notifyEvent(event: String, data: String) {
-                  withContext(Dispatchers.Main) {
-                      for (listener in listeners) listener.onEvent(event, data)
-                  }
-              }
-
-              private suspend fun notifyConnection(connected: Boolean) {
-                  isConnected = connected
-                  withContext(Dispatchers.Main) {
-                      for (listener in listeners) listener.onConnectionChanged(connected)
-                  }
-              }
-
-              private fun getHotspotGatewayIp(context: Context): String? {
-                  val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                  val network = cm.activeNetwork ?: return "192.168.43.1"
-                  val linkProps: LinkProperties = cm.getLinkProperties(network) ?: return "192.168.43.1"
-                  for (route in linkProps.routes) {
-                      if (route.isDefaultRoute && route.gateway != null) {
-                          val ip = route.gateway?.hostAddress
-                          if (!ip.isNullOrEmpty() && ip != "0.0.0.0") return ip
+                              when (event) {
+                                  "PING" -> writer?.println("PONG|")
+                                  "PONG" -> {}
+                                  else -> notifyEvent(event, data)
+                              }
+                          }
+                      } catch (_: Exception) {
+                      } finally {
+                          heartbeatJob.cancel()
+                          writer = null
+                          try { socket.close() } catch (_: Exception) {}
+                          notifyConnection(false)
                       }
                   }
-                  return "192.168.43.1"
+
+                  fun send(event: String, data: String = "") {
+                      scope.launch {
+                          try {
+                              writer?.println("$event|$data")
+                          } catch (_: Exception) {}
+                      }
+                  }
+
+                  private suspend fun notifyEvent(event: String, data: String) {
+                      withContext(Dispatchers.Main) {
+                          for (listener in listeners) listener.onEvent(event, data)
+                      }
+                  }
+
+                  private suspend fun notifyConnection(connected: Boolean) {
+                      isConnected = connected
+                      withContext(Dispatchers.Main) {
+                          for (listener in listeners) listener.onConnectionChanged(connected)
+                      }
+                  }
+
+                  private fun getHotspotGatewayIp(context: Context): String? {
+                      val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                      val network = cm.activeNetwork ?: return "192.168.43.1"
+                      val linkProps: LinkProperties = cm.getLinkProperties(network) ?: return "192.168.43.1"
+                      for (route in linkProps.routes) {
+                          if (route.isDefaultRoute && route.gateway != null) {
+                              val ip = route.gateway?.hostAddress
+                              if (!ip.isNullOrEmpty() && ip != "0.0.0.0") return ip
+                          }
+                      }
+                      return "192.168.43.1"
+                  }
               }
-          }
-          EOF
+          """)
 
-          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/SipAudioEngine.kt
-          package com.example.remotephone
+          write_file("app/src/main/java/com/example/remotephone/SipAudioEngine.kt", """
+              package com.example.remotephone
 
-          import android.content.Context
-          import android.media.AudioManager
-          import org.linphone.core.*
+              import android.annotation.SuppressLint
+              import android.content.Context
+              import android.media.*
+              import kotlinx.coroutines.*
+              import java.net.DatagramPacket
+              import java.net.DatagramSocket
+              import java.net.InetAddress
+              import java.security.MessageDigest
+              import java.util.UUID
 
-          object SipAudioEngine {
-              private var core: Core? = null
-              private var appContext: Context? = null
+              object SipAudioEngine {
+                  private var appContext: Context? = null
+                  private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+                  private var sipJob: Job? = null
+                  private var rtpJob: Job? = null
+                  private var sipSocket: DatagramSocket? = null
+                  private var rtpSocket: DatagramSocket? = null
 
-              @Volatile
-              var awaitingAutoAnswer = false
+                  @Volatile
+                  var awaitingAutoAnswer = false
+                  @Volatile
+                  private var isCallActive = false
+                  @Volatile
+                  private var isMicMuted = false
 
-              var onCallConnected: (() -> Unit)? = null
-              var onCallTerminated: (() -> Unit)? = null
+                  var onCallConnected: (() -> Unit)? = null
+                  var onCallTerminated: (() -> Unit)? = null
 
-              private val coreListener = object : CoreListenerStub() {
-                  override fun onCallStateChanged(
-                      core: Core,
-                      call: Call,
-                      state: Call.State,
-                      message: String
+                  @Synchronized
+                  fun initAndRegister(
+                      context: Context,
+                      sipUsername: String,
+                      sipPassword: String,
+                      sipDomain: String
                   ) {
-                      when (state) {
-                          Call.State.IncomingReceived -> {
-                              if (awaitingAutoAnswer) {
-                                  awaitingAutoAnswer = false
-                                  call.accept()
-                                  setSpeakerphone(false)
-                                  onCallConnected?.invoke()
+                      if (sipUsername.isEmpty() || sipDomain.isEmpty()) return
+                      appContext = context.applicationContext
+                      sipJob?.cancel()
+
+                      sipJob = scope.launch {
+                          try {
+                              sipSocket?.close()
+                              val socket = DatagramSocket()
+                              sipSocket = socket
+                              val serverIp = InetAddress.getByName(sipDomain.substringBefore(":"))
+                              val serverPort = sipDomain.substringAfter(":", "5060").toIntOrNull() ?: 5060
+                              val callId = UUID.randomUUID().toString()
+                              var cseq = 1
+
+                              fun sendSip(msg: String) {
+                                  val bytes = msg.toByteArray()
+                                  socket.send(DatagramPacket(bytes, bytes.size, serverIp, serverPort))
                               }
-                          }
-                          Call.State.Connected, Call.State.StreamsRunning -> {
-                              onCallConnected?.invoke()
-                          }
-                          Call.State.End, Call.State.Released, Call.State.Error -> {
-                              awaitingAutoAnswer = false
-                              setSpeakerphone(false)
-                              onCallTerminated?.invoke()
-                          }
-                          else -> {}
-                      }
-                  }
-              }
 
-              @Synchronized
-              fun initAndRegister(
-                  context: Context,
-                  sipUsername: String,
-                  sipPassword: String,
-                  sipDomain: String
-              ) {
-                  if (sipUsername.isEmpty() || sipDomain.isEmpty()) return
-                  appContext = context.applicationContext
-                  val factory = Factory.instance()
-                  factory.setDebugMode(false, "RemotePhoneSIP")
+                              fun buildRegister(authHeader: String = ""): String {
+                                  val branch = "z9hG4bK" + UUID.randomUUID().toString().take(8)
+                                  return "REGISTER sip:$sipDomain SIP/2.0\\r\\n" +
+                                      "Via: SIP/2.0/UDP 0.0.0.0:${socket.localPort};rport;branch=$branch\\r\\n" +
+                                      "Max-Forwards: 70\\r\\n" +
+                                      "From: <sip:$sipUsername@$sipDomain>;tag=remphone\\r\\n" +
+                                      "To: <sip:$sipUsername@$sipDomain>\\r\\n" +
+                                      "Call-ID: $callId\\r\\n" +
+                                      "CSeq: ${cseq++} REGISTER\\r\\n" +
+                                      "Contact: <sip:$sipUsername@0.0.0.0:${socket.localPort}>\\r\\n" +
+                                      "Expires: 300\\r\\n" +
+                                      authHeader +
+                                      "Content-Length: 0\\r\\n\\r\\n"
+                              }
 
-                  if (core == null) {
-                      core = factory.createCore(null, null, appContext!!).apply {
-                          enableAdaptiveRateControl(true)
-                          addListener(coreListener)
-                          start()
-                      }
-                  } else {
-                      core?.clearAccounts()
-                      core?.clearAllAuthInfo()
-                  }
+                              // Periyodik SIP Register
+                              launch {
+                                  while (isActive) {
+                                      try { sendSip(buildRegister()) } catch (_: Exception) {}
+                                      delay(45_000)
+                                  }
+                              }
 
-                  val authInfo = factory.createAuthInfo(sipUsername, null, sipPassword, null, null, sipDomain)
-                  val params = core!!.createAccountParams().apply {
-                      identityAddress = factory.createAddress("sip:$sipUsername@$sipDomain")
-                      serverAddress = factory.createAddress("sip:$sipDomain;transport=udp")
-                      isRegisterEnabled = true
-                  }
+                              val buf = ByteArray(4096)
+                              while (isActive) {
+                                  val packet = DatagramPacket(buf, buf.size)
+                                  socket.receive(packet)
+                                  val text = String(packet.data, 0, packet.length)
 
-                  val account = core!!.createAccount(params)
-                  core?.addAuthInfo(authInfo)
-                  core?.addAccount(account)
-                  core?.defaultAccount = account
-              }
+                                  if (text.startsWith("SIP/2.0 401") || text.startsWith("SIP/2.0 407")) {
+                                      val realm = Regex("realm=\\"([^\\"]+)\\"").find(text)?.groupValues?.get(1) ?: sipDomain
+                                      val nonce = Regex("nonce=\\"([^\\"]+)\\"").find(text)?.groupValues?.get(1) ?: ""
+                                      val ha1 = md5("$sipUsername:$realm:$sipPassword")
+                                      val ha2 = md5("REGISTER:sip:$sipDomain")
+                                      val resp = md5("$ha1:$nonce:$ha2")
+                                      val hdrName = if (text.startsWith("SIP/2.0 407")) "Proxy-Authorization" else "Authorization"
+                                      val auth = "$hdrName: Digest username=\\"$sipUsername\\", realm=\\"$realm\\", nonce=\\"$nonce\\", uri=\\"sip:$sipDomain\\", response=\\"$resp\\", algorithm=MD5\\r\\n"
+                                      sendSip(buildRegister(auth))
+                                  } else if (text.startsWith("INVITE ")) {
+                                      if (awaitingAutoAnswer) {
+                                          awaitingAutoAnswer = false
+                                          val via = text.lines().firstOrNull { it.startsWith("Via:", true) } ?: ""
+                                          val from = text.lines().firstOrNull { it.startsWith("From:", true) } ?: ""
+                                          val to = text.lines().firstOrNull { it.startsWith("To:", true) } ?: ""
+                                          val cid = text.lines().firstOrNull { it.startsWith("Call-ID:", true) } ?: ""
+                                          val cs = text.lines().firstOrNull { it.startsWith("CSeq:", true) } ?: ""
 
-              fun prepareForIncomingAudio() {
-                  awaitingAutoAnswer = true
-              }
+                                          val remoteRtpPort = Regex("m=audio (\\\\d+)").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 10000
+                                          val remoteRtpIp = Regex("c=IN IP4 ([0-9.]+)").find(text)?.groupValues?.get(1) ?: serverIp.hostAddress
 
-              fun terminateAudioCall() {
-                  awaitingAutoAnswer = false
-                  setSpeakerphone(false)
-                  core?.currentCall?.terminate()
-              }
+                                          rtpSocket?.close()
+                                          val rtp = DatagramSocket()
+                                          rtpSocket = rtp
 
-              fun sendDtmf(digit: Char) {
-                  core?.currentCall?.sendDtmf(digit)
-              }
-
-              fun setMuted(muted: Boolean) {
-                  core?.isMicEnabled = !muted
-              }
-
-              fun setSpeakerphone(enabled: Boolean) {
-                  val am = appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-                  am.mode = AudioManager.MODE_IN_COMMUNICATION
-                  am.isSpeakerphoneOn = enabled
-              }
-          }
-          EOF
-
-          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt
-          package com.example.remotephone
-
-          import android.app.Notification
-          import android.app.NotificationChannel
-          import android.app.NotificationManager
-          import android.app.PendingIntent
-          import android.app.Service
-          import android.content.Context
-          import android.content.Intent
-          import android.content.pm.ServiceInfo
-          import android.net.wifi.WifiManager
-          import android.os.Build
-          import android.os.IBinder
-          import android.os.PowerManager
-          import androidx.core.app.NotificationCompat
-          import androidx.core.app.ServiceCompat
-
-          class BridgeKeepAliveService : Service(), HotspotLanBridge.Listener {
-
-              companion object {
-                  private const val CHANNEL_ID = "RemotePhoneKeepAliveChannel"
-                  private const val CALL_CHANNEL_ID = "IncomingRemoteCallChannel"
-                  private const val NOTIFICATION_ID = 1001
-                  const val CALL_NOTIFICATION_ID = 2002
-              }
-
-              private var wakeLock: PowerManager.WakeLock? = null
-              private var wifiLock: WifiManager.WifiLock? = null
-
-              override fun onCreate() {
-                  super.onCreate()
-                  createNotificationChannels()
-                  acquireHardwareLocks()
-                  HotspotLanBridge.addListener(this)
-              }
-
-              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-                  val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
-                  val mode = intent?.getStringExtra("MODE") ?: prefs.getString("saved_mode", "NONE") ?: "NONE"
-
-                  val roleText = when (mode) {
-                      "HOST" -> "1. Telefon (Note 10 Lite Ana Hat) Aktif"
-                      "CLIENT" -> "2. Telefon (S25 Ultra Uzak Ahize) Aktif"
-                      else -> "Servis Hazır"
-                  }
-
-                  val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-                      .setContentTitle("Telefon Köprüsü")
-                      .setContentText(roleText)
-                      .setSmallIcon(android.R.drawable.sym_action_call)
-                      .setOngoing(true)
-                      .setPriority(NotificationCompat.PRIORITY_LOW)
-                      .build()
-
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                      ServiceCompat.startForeground(
-                          this,
-                          NOTIFICATION_ID,
-                          notification,
-                          ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                      )
-                  } else {
-                      startForeground(NOTIFICATION_ID, notification)
-                  }
-
-                  if (mode == "HOST") {
-                      HostInCallService.sipBridgeDidNumber = prefs.getString("sip_number", "") ?: ""
-                      HotspotLanBridge.startHostServer()
-                  } else if (mode == "CLIENT") {
-                      SipAudioEngine.initAndRegister(
-                          this,
-                          prefs.getString("sip_user", "") ?: "",
-                          prefs.getString("sip_pass", "") ?: "",
-                          prefs.getString("sip_domain", "") ?: ""
-                      )
-                      HotspotLanBridge.startClientAutoConnect(this)
-                  }
-
-                  return START_STICKY
-              }
-
-              override fun onEvent(event: String, data: String) {
-                  if (event == "INCOMING") {
-                      showIncomingCallNotification(data, isLocalHostFallback = false)
-                  } else if (event == "ENDED") {
-                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                      nm.cancel(CALL_NOTIFICATION_ID)
-                  }
-              }
-
-              fun showIncomingCallNotification(callerPayload: String, isLocalHostFallback: Boolean) {
-                  val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                  val (rawNumber, resolvedName) = ContactHelper.resolveCallerInfo(this, callerPayload)
-                  val displayTitle = resolvedName ?: rawNumber
-                  val displaySubText = if (resolvedName != null) "$rawNumber • Gelen Arama" else "Gelen Arama"
-
-                  val fullScreenIntent = Intent(this, RemoteCallActivity::class.java).apply {
-                      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                      putExtra("CALLER_NUMBER", callerPayload)
-                      putExtra("IS_OUTGOING", false)
-                      putExtra("IS_LOCAL_FALLBACK", isLocalHostFallback)
-                  }
-                  val fullScreenPendingIntent = PendingIntent.getActivity(
-                      this, 0, fullScreenIntent,
-                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                  )
-
-                  val notification = NotificationCompat.Builder(this, CALL_CHANNEL_ID)
-                      .setSmallIcon(android.R.drawable.sym_call_incoming)
-                      .setContentTitle(displayTitle)
-                      .setContentText(displaySubText)
-                      .setPriority(NotificationCompat.PRIORITY_MAX)
-                      .setCategory(NotificationCompat.CATEGORY_CALL)
-                      .setFullScreenIntent(fullScreenPendingIntent, true)
-                      .setOngoing(true)
-                      .setAutoCancel(true)
-                      .build()
-
-                  nm.notify(CALL_NOTIFICATION_ID, notification)
-                  try {
-                      startActivity(fullScreenIntent)
-                  } catch (_: Exception) {}
-              }
-
-              private fun acquireHardwareLocks() {
-                  val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  wakeLock = powerManager.newWakeLock(
-                      PowerManager.PARTIAL_WAKE_LOCK,
-                      "RemotePhone::BridgeWakeLock"
-                  ).apply {
-                      setReferenceCounted(false)
-                      acquire()
-                  }
-
-                  val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                  val lockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                      WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-                  } else {
-                      @Suppress("DEPRECATION")
-                      WifiManager.WIFI_MODE_FULL_HIGH_PERF
-                  }
-                  wifiLock = wifiManager.createWifiLock(lockMode, "RemotePhone::BridgeWifiLock").apply {
-                      setReferenceCounted(false)
-                      acquire()
-                  }
-              }
-
-              override fun onDestroy() {
-                  HotspotLanBridge.removeListener(this)
-                  try {
-                      if (wakeLock?.isHeld == true) wakeLock?.release()
-                      if (wifiLock?.isHeld == true) wifiLock?.release()
-                  } catch (_: Exception) {}
-                  super.onDestroy()
-              }
-
-              override fun onBind(intent: Intent?): IBinder? = null
-
-              private fun createNotificationChannels() {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      val nm = getSystemService(NotificationManager::class.java)
-                      nm.createNotificationChannel(
-                          NotificationChannel(
-                              CHANNEL_ID,
-                              "Arka Plan Bağlantı Servisi",
-                              NotificationManager.IMPORTANCE_LOW
-                          )
-                      )
-                      nm.createNotificationChannel(
-                          NotificationChannel(
-                              CALL_CHANNEL_ID,
-                              "Gelen Çağrı Uyarıları",
-                              NotificationManager.IMPORTANCE_HIGH
-                          ).apply {
-                              lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                          }
-                      )
-                  }
-              }
-          }
-          EOF
-
-          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/HostInCallService.kt
-          package com.example.remotephone
-
-          import android.annotation.SuppressLint
-          import android.content.Context
-          import android.content.Intent
-          import android.net.Uri
-          import android.os.Bundle
-          import android.telecom.Call
-          import android.telecom.CallAudioState
-          import android.telecom.InCallService
-          import android.telecom.TelecomManager
-          import android.telecom.VideoProfile
-
-          class HostInCallService : InCallService(), HotspotLanBridge.Listener {
-
-              companion object {
-                  var instance: HostInCallService? = null
-                  var sipBridgeDidNumber: String = ""
-              }
-
-              private var isOutgoingBridgeMode = false
-              private var targetExternalCall: Call? = null
-              private var sipBridgeCall: Call? = null
-
-              override fun onCreate() {
-                  super.onCreate()
-                  instance = this
-                  val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
-                  if (sipBridgeDidNumber.isEmpty()) {
-                      sipBridgeDidNumber = prefs.getString("sip_number", "") ?: ""
-                  }
-                  HotspotLanBridge.addListener(this)
-              }
-
-              override fun onDestroy() {
-                  HotspotLanBridge.removeListener(this)
-                  instance = null
-                  super.onDestroy()
-              }
-
-              override fun onEvent(event: String, data: String) {
-                  when (event) {
-                      "ANSWER" -> {
-                          calls.firstOrNull { it.state == Call.STATE_RINGING }?.reject(false, null)
-                      }
-                      "REJECT" -> {
-                          if (isOutgoingBridgeMode) {
-                              hangupAllCalls()
-                          } else {
-                              silenceRinger()
-                          }
-                      }
-                      "DIAL" -> {
-                          if (data.isNotEmpty() && sipBridgeDidNumber.isNotEmpty()) {
-                              startOutgoingConferenceBridge(data)
-                          }
-                      }
-                  }
-              }
-
-              @SuppressLint("MissingPermission")
-              private fun startOutgoingConferenceBridge(targetNumber: String) {
-                  isOutgoingBridgeMode = true
-                  targetExternalCall = null
-                  sipBridgeCall = null
-
-                  val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                  tm.placeCall(Uri.parse("tel:" + Uri.encode(targetNumber)), Bundle())
-              }
-
-              @SuppressLint("MissingPermission")
-              private fun dialSipBridgeNumber() {
-                  val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                  tm.placeCall(Uri.parse("tel:" + Uri.encode(sipBridgeDidNumber)), Bundle())
-              }
-
-              override fun onCallAdded(call: Call) {
-                  super.onCallAdded(call)
-                  val number = call.details?.handle?.schemeSpecificPart ?: "Bilinmeyen Numara"
-
-                  if (isOutgoingBridgeMode) {
-                      if (targetExternalCall == null) {
-                          targetExternalCall = call
-                      } else if (sipBridgeCall == null) {
-                          sipBridgeCall = call
-                      }
-                  }
-
-                  call.registerCallback(object : Call.Callback() {
-                      override fun onStateChanged(call: Call, state: Int) {
-                          when (state) {
-                              Call.STATE_ACTIVE -> {
-                                  if (isOutgoingBridgeMode) {
-                                      if (call == targetExternalCall && sipBridgeCall == null) {
-                                          HotspotLanBridge.send("OUTGOING_RINGING_SIP")
-                                          dialSipBridgeNumber()
-                                      } else if (call == sipBridgeCall && targetExternalCall != null) {
-                                          targetExternalCall?.conference(sipBridgeCall)
-                                          setMuted(true)
-                                          HotspotLanBridge.send("OUTGOING_CONNECTED")
+                                          val sdp = "v=0\\r\\no=- 1 1 IN IP4 0.0.0.0\\r\\ns=-\\r\\nc=IN IP4 0.0.0.0\\r\\nt=0 0\\r\\nm=audio ${rtp.localPort} RTP/AVP 8 0\\r\\na=rtpmap:8 PCMA/8000\\r\\na=rtpmap:0 PCMU/8000\\r\\n"
+                                          val ok = "SIP/2.0 200 OK\\r\\n$via\\r\\n$from\\r\\n$to;tag=srv1\\r\\n$cid\\r\\n$cs\\r\\nContent-Type: application/sdp\\r\\nContent-Length: ${sdp.length}\\r\\n\\r\\n$sdp"
+                                          sendSip(ok)
+                                          startRtpAudioStream(rtp, InetAddress.getByName(remoteRtpIp), remoteRtpPort)
+                                          onCallConnected?.invoke()
                                       }
+                                  } else if (text.startsWith("BYE ")) {
+                                      terminateAudioCall()
+                                      onCallTerminated?.invoke()
                                   }
                               }
-                              Call.STATE_DISCONNECTED -> {
-                                  if (isOutgoingBridgeMode) {
-                                      hangupAllCalls()
-                                  } else {
-                                      HotspotLanBridge.send("ENDED")
-                                  }
-                              }
-                          }
+                          } catch (_: Exception) {}
                       }
-                  })
-
-                  if (!isOutgoingBridgeMode && call.state == Call.STATE_RINGING) {
-                      val hostContactName = ContactHelper.getContactName(this, number) ?: ""
-                      val callerPayload = "$number~$hostContactName"
-
-                      if (HotspotLanBridge.isConnected) {
-                          HotspotLanBridge.send("INCOMING", callerPayload)
-                      } else {
-                          val intent = Intent(this, RemoteCallActivity::class.java).apply {
-                              flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                              putExtra("CALLER_NUMBER", callerPayload)
-                              putExtra("IS_OUTGOING", false)
-                              putExtra("IS_LOCAL_FALLBACK", true)
-                          }
-                          startActivity(intent)
-                      }
-                  }
-              }
-
-              fun answerLocalCall() {
-                  calls.firstOrNull { it.state == Call.STATE_RINGING }
-                      ?.answer(VideoProfile.STATE_AUDIO_ONLY)
-              }
-
-              fun setLocalSpeaker(enabled: Boolean) {
-                  setAudioRoute(if (enabled) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE)
-              }
-
-              fun setLocalMute(muted: Boolean) {
-                  setMuted(muted)
-              }
-
-              fun hangupAllCalls() {
-                  isOutgoingBridgeMode = false
-                  setMuted(false)
-                  calls.forEach {
-                      if (it.state == Call.STATE_RINGING) it.reject(false, null) else it.disconnect()
-                  }
-                  targetExternalCall = null
-                  sipBridgeCall = null
-                  HotspotLanBridge.send("ENDED")
-              }
-
-              @SuppressLint("MissingPermission")
-              fun configureForwarding(context: Context, sipNumber: String, enable: Boolean) {
-                  sipBridgeDidNumber = sipNumber
-                  val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                  val ussd = if (enable) "*67*$sipNumber#" else "#67#"
-                  tm.placeCall(Uri.parse("tel:" + Uri.encode(ussd)), Bundle())
-              }
-          }
-          EOF
-
-          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/RemoteCallActivity.kt
-          package com.example.remotephone
-
-          import android.app.NotificationManager
-          import android.content.Context
-          import android.graphics.Color
-          import android.media.Ringtone
-          import android.media.RingtoneManager
-          import android.os.Bundle
-          import android.os.PowerManager
-          import android.os.SystemClock
-          import android.view.View
-          import android.widget.Chronometer
-          import android.widget.LinearLayout
-          import android.widget.Space
-          import android.widget.TextView
-          import androidx.appcompat.app.AppCompatActivity
-          import com.google.android.material.button.MaterialButton
-
-          class RemoteCallActivity : AppCompatActivity(), HotspotLanBridge.Listener {
-
-              private var ringtone: Ringtone? = null
-              private var proximityWakeLock: PowerManager.WakeLock? = null
-              private var isMuted = false
-              private var isSpeakerOn = false
-              private var isLocalFallback = false
-              private var rawPhoneNumber: String = ""
-              private var resolvedContactName: String? = null
-
-              private lateinit var tvCallerNumber: TextView
-              private lateinit var tvCallStatus: TextView
-              private lateinit var chronometer: Chronometer
-              private lateinit var layoutInCallControls: LinearLayout
-              private lateinit var btnAnswer: MaterialButton
-              private lateinit var spaceBetween: Space
-
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-                  setContentView(R.layout.activity_remote_call)
-
-                  val isOutgoing = intent.getBooleanExtra("IS_OUTGOING", false)
-                  isLocalFallback = intent.getBooleanExtra("IS_LOCAL_FALLBACK", false)
-                  val callerPayload = intent.getStringExtra("CALLER_NUMBER") ?: "Bilinmeyen Numara"
-
-                  val (number, name) = ContactHelper.resolveCallerInfo(this, callerPayload)
-                  rawPhoneNumber = number
-                  resolvedContactName = name
-
-                  tvCallerNumber = findViewById(R.id.tvCallerNumber)
-                  tvCallStatus = findViewById(R.id.tvCallStatus)
-                  chronometer = findViewById(R.id.chronometerCallTimer)
-                  layoutInCallControls = findViewById(R.id.layoutInCallControls)
-                  btnAnswer = findViewById(R.id.btnAnswer)
-                  val btnReject = findViewById<MaterialButton>(R.id.btnReject)
-                  spaceBetween = findViewById(R.id.spaceBetweenCallButtons)
-                  val btnMute = findViewById<MaterialButton>(R.id.btnMute)
-                  val btnSpeaker = findViewById<MaterialButton>(R.id.btnSpeaker)
-
-                  if (!resolvedContactName.isNullOrEmpty()) {
-                      tvCallerNumber.text = resolvedContactName
-                  } else {
-                      tvCallerNumber.text = rawPhoneNumber
-                  }
-
-                  acquireProximitySensorLock()
-                  HotspotLanBridge.addListener(this)
-
-                  if (isOutgoing) {
-                      updateStatusText("Aranıyor...")
-                      btnAnswer.visibility = View.GONE
-                      spaceBetween.visibility = View.GONE
-                  } else {
-                      updateStatusText("Gelen arama...")
-                      val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                      ringtone = RingtoneManager.getRingtone(applicationContext, ringtoneUri)?.apply { play() }
-                  }
-
-                  SipAudioEngine.onCallConnected = {
-                      runOnUiThread { switchToActiveCallUi() }
-                  }
-
-                  SipAudioEngine.onCallTerminated = {
-                      runOnUiThread { cleanupAndFinish() }
-                  }
-
-                  btnMute.setOnClickListener {
-                      isMuted = !isMuted
-                      if (isLocalFallback) {
-                          HostInCallService.instance?.setLocalMute(isMuted)
-                      } else {
-                          SipAudioEngine.setMuted(isMuted)
-                      }
-                      btnMute.setBackgroundColor(if (isMuted) Color.parseColor("#8AB4F8") else Color.parseColor("#2D3135"))
-                      btnMute.setTextColor(if (isMuted) Color.parseColor("#1A1C1E") else Color.parseColor("#E3E3E3"))
-                  }
-
-                  btnSpeaker.setOnClickListener {
-                      isSpeakerOn = !isSpeakerOn
-                      if (isLocalFallback) {
-                          HostInCallService.instance?.setLocalSpeaker(isSpeakerOn)
-                      } else {
-                          SipAudioEngine.setSpeakerphone(isSpeakerOn)
-                      }
-                      btnSpeaker.setBackgroundColor(if (isSpeakerOn) Color.parseColor("#8AB4F8") else Color.parseColor("#2D3135"))
-                      btnSpeaker.setTextColor(if (isSpeakerOn) Color.parseColor("#1A1C1E") else Color.parseColor("#E3E3E3"))
-                  }
-
-                  btnAnswer.setOnClickListener {
-                      ringtone?.stop()
-                      btnAnswer.isEnabled = false
-                      if (isLocalFallback) {
-                          HostInCallService.instance?.answerLocalCall()
-                          switchToActiveCallUi()
-                      } else {
-                          updateStatusText("Bağlanıyor...")
-                          SipAudioEngine.prepareForIncomingAudio()
-                          HotspotLanBridge.send("ANSWER")
-                      }
-                  }
-
-                  btnReject.setOnClickListener {
-                      if (isLocalFallback) {
-                          HostInCallService.instance?.hangupAllCalls()
-                      } else {
-                          SipAudioEngine.terminateAudioCall()
-                          HotspotLanBridge.send("REJECT")
-                      }
-                      cleanupAndFinish()
-                  }
-              }
-
-              private fun updateStatusText(status: String) {
-                  tvCallStatus.text = if (!resolvedContactName.isNullOrEmpty()) {
-                      "$rawPhoneNumber • $status"
-                  } else {
-                      status
-                  }
-              }
-
-              override fun onEvent(event: String, data: String) {
-                  when (event) {
-                      "OUTGOING_RINGING_SIP" -> updateStatusText("Karşı taraf açtı, bağlanıyor...")
-                      "OUTGOING_CONNECTED" -> switchToActiveCallUi()
-                      "ENDED" -> cleanupAndFinish()
-                  }
-              }
-
-              private fun switchToActiveCallUi() {
-                  updateStatusText("Görüşme Aktif")
-                  btnAnswer.visibility = View.GONE
-                  spaceBetween.visibility = View.GONE
-                  layoutInCallControls.visibility = View.VISIBLE
-                  if (chronometer.visibility != View.VISIBLE) {
-                      chronometer.visibility = View.VISIBLE
-                      chronometer.base = SystemClock.elapsedRealtime()
-                      chronometer.start()
-                  }
-              }
-
-              private fun acquireProximitySensorLock() {
-                  val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  if (pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
-                      proximityWakeLock = pm.newWakeLock(
-                          PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
-                          "RemotePhone::ProximityWakeLock"
-                      ).apply { acquire(60 * 60 * 1000L) }
-                  }
-              }
-
-              private fun cleanupAndFinish() {
-                  ringtone?.stop()
-                  chronometer.stop()
-                  val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                  nm.cancel(BridgeKeepAliveService.CALL_NOTIFICATION_ID)
-                  finish()
-              }
-
-              override fun onDestroy() {
-                  HotspotLanBridge.removeListener(this)
-                  ringtone?.stop()
-                  try {
-                      if (proximityWakeLock?.isHeld == true) proximityWakeLock?.release()
-                  } catch (_: Exception) {}
-                  super.onDestroy()
-              }
-          }
-          EOF
-
-          cat << 'EOF' | sed 's/^          //' > app/src/main/java/com/example/remotephone/MainActivity.kt
-          package com.example.remotephone
-
-          import android.Manifest
-          import android.annotation.SuppressLint
-          import android.app.Activity
-          import android.app.NotificationManager
-          import android.app.role.RoleManager
-          import android.content.Context
-          import android.content.Intent
-          import android.content.pm.PackageManager
-          import android.media.AudioManager
-          import android.media.ToneGenerator
-          import android.net.Uri
-          import android.os.Build
-          import android.os.Bundle
-          import android.os.PowerManager
-          import android.provider.Settings
-          import android.telecom.TelecomManager
-          import android.view.View
-          import android.widget.Button
-          import android.widget.EditText
-          import android.widget.TextView
-          import android.widget.Toast
-          import androidx.activity.result.contract.ActivityResultContracts
-          import androidx.appcompat.app.AppCompatActivity
-          import androidx.core.content.ContextCompat
-          import com.google.android.material.card.MaterialCardView
-
-          class MainActivity : AppCompatActivity(), HotspotLanBridge.Listener {
-
-              private var toneGenerator: ToneGenerator? = null
-              private lateinit var tvConnectionStatus: TextView
-
-              private val roleLauncher = registerForActivityResult(
-                  ActivityResultContracts.StartActivityForResult()
-              ) { result ->
-                  if (result.resultCode == Activity.RESULT_OK) {
-                      Toast.makeText(this, "Varsayılan Telefon Uygulaması Ayarlandı", Toast.LENGTH_SHORT).show()
-                  }
-              }
-
-              private val permissionLauncher = registerForActivityResult(
-                  ActivityResultContracts.RequestMultiplePermissions()
-              ) { }
-
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-                  setContentView(R.layout.activity_main)
-
-                  try {
-                      toneGenerator = ToneGenerator(AudioManager.STREAM_DTMF, 80)
-                  } catch (_: Exception) {}
-
-                  requestRuntimePermissions()
-                  requestBatteryOptimizationExemption()
-                  checkFullScreenIntentPermission()
-
-                  val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
-                  tvConnectionStatus = findViewById(R.id.tvConnectionStatus)
-                  val cardSetupPanel = findViewById<MaterialCardView>(R.id.cardSetupPanel)
-                  val btnToggleSettings = findViewById<Button>(R.id.btnToggleSettings)
-
-                  val etSipNumber = findViewById<EditText>(R.id.etSipNumber)
-                  val etSipUser = findViewById<EditText>(R.id.etSipUser)
-                  val etSipPass = findViewById<EditText>(R.id.etSipPass)
-                  val etSipDomain = findViewById<EditText>(R.id.etSipDomain)
-                  val etDialNumber = findViewById<EditText>(R.id.etDialNumber)
-
-                  etSipNumber.setText(prefs.getString("sip_number", ""))
-                  etSipUser.setText(prefs.getString("sip_user", ""))
-                  etSipPass.setText(prefs.getString("sip_pass", ""))
-                  etSipDomain.setText(prefs.getString("sip_domain", ""))
-
-                  if (intent?.action == Intent.ACTION_DIAL || intent?.action == Intent.ACTION_VIEW) {
-                      intent?.data?.schemeSpecificPart?.let { etDialNumber.setText(it) }
-                  }
-
-                  val savedMode = prefs.getString("saved_mode", "NONE") ?: "NONE"
-                  if (savedMode != "NONE") {
-                      cardSetupPanel.visibility = View.GONE
-                      startKeepAliveService(savedMode)
-                  }
-
-                  btnToggleSettings.setOnClickListener {
-                      cardSetupPanel.visibility =
-                          if (cardSetupPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-                  }
-
-                  setupGoogleDialpad(etDialNumber)
-                  HotspotLanBridge.addListener(this)
-
-                  findViewById<Button>(R.id.btnStartHost).setOnClickListener {
-                      val sipDid = etSipNumber.text.toString().trim()
-                      prefs.edit()
-                          .putString("sip_number", sipDid)
-                          .putString("saved_mode", "HOST")
-                          .apply()
-
-                      requestDefaultDialerRole()
-                      if (sipDid.isNotEmpty()) {
-                          HostInCallService().configureForwarding(this, sipDid, true)
-                      }
-                      startKeepAliveService("HOST")
-                      cardSetupPanel.visibility = View.GONE
-                      tvConnectionStatus.text = "● Note 10 Lite (Ana Hat) Aktif - Hotspot Açık Olmalı"
-                  }
-
-                  findViewById<Button>(R.id.btnStartClient).setOnClickListener {
-                      val user = etSipUser.text.toString().trim()
-                      val pass = etSipPass.text.toString().trim()
-                      val domain = etSipDomain.text.toString().trim()
-
-                      prefs.edit()
-                          .putString("sip_user", user)
-                          .putString("sip_pass", pass)
-                          .putString("sip_domain", domain)
-                          .putString("saved_mode", "CLIENT")
-                          .apply()
-
-                      checkFullScreenIntentPermission()
-                      startKeepAliveService("CLIENT")
-                      cardSetupPanel.visibility = View.GONE
-                      tvConnectionStatus.text = "● S25 Ultra (Uzak Ahize) - Bağlanıyor..."
                   }
 
                   @SuppressLint("MissingPermission")
-                  findViewById<Button>(R.id.btnMakeCall).setOnClickListener {
-                      val targetNumber = etDialNumber.text.toString().trim()
-                      if (targetNumber.isEmpty()) {
-                          Toast.makeText(this, "Lütfen numara çevirin", Toast.LENGTH_SHORT).show()
-                          return@setOnClickListener
-                      }
+                  private fun startRtpAudioStream(socket: DatagramSocket, remoteIp: InetAddress, remotePort: Int) {
+                      isCallActive = true
+                      rtpJob?.cancel()
+                      rtpJob = scope.launch {
+                          val sampleRate = 8000
+                          val minBuf = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+                          val recorder = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf)
+                          val player = AudioTrack.Builder()
+                              .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                              .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                              .setBufferSizeInBytes(minBuf)
+                              .build()
 
-                      val currentMode = prefs.getString("saved_mode", "CLIENT")
-                      if (currentMode == "HOST" && !HotspotLanBridge.isConnected) {
-                          val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                          tm.placeCall(Uri.parse("tel:" + Uri.encode(targetNumber)), Bundle())
-                          val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
-                              putExtra("CALLER_NUMBER", targetNumber)
-                              putExtra("IS_OUTGOING", true)
-                              putExtra("IS_LOCAL_FALLBACK", true)
+                          recorder.startRecording()
+                          player.play()
+
+                          // Giden Ses (Mikrofon -> PCMA RTP)
+                          launch {
+                              var seq = 0
+                              var ts = 0
+                              val pcmBuf = ShortArray(160)
+                              val rtpBuf = ByteArray(172)
+                              while (isActive && isCallActive) {
+                                  val read = recorder.read(pcmBuf, 0, 160)
+                                  if (read > 0 && !isMicMuted) {
+                                      rtpBuf[0] = 0x80.toByte()
+                                      rtpBuf[1] = 8.toByte() // PCMA
+                                      rtpBuf[2] = (seq shr 8).toByte()
+                                      rtpBuf[3] = seq.toByte()
+                                      rtpBuf[4] = (ts shr 24).toByte()
+                                      rtpBuf[5] = (ts shr 16).toByte()
+                                      rtpBuf[6] = (ts shr 8).toByte()
+                                      rtpBuf[7] = ts.toByte()
+                                      for (i in 0 until 160) {
+                                          rtpBuf[12 + i] = linearToAlaw(pcmBuf[i])
+                                      }
+                                      try { socket.send(DatagramPacket(rtpBuf, rtpBuf.size, remoteIp, remotePort)) } catch (_: Exception) {}
+                                      seq++
+                                      ts += 160
+                                  }
+                              }
                           }
-                          startActivity(callIntent)
+
+                          // Gelen Ses (PCMA RTP -> Ahize/Hoparlör)
+                          try {
+                              val inBuf = ByteArray(512)
+                              val outPcm = ShortArray(160)
+                              while (isActive && isCallActive) {
+                                  val pkt = DatagramPacket(inBuf, inBuf.size)
+                                  socket.receive(pkt)
+                                  if (pkt.length > 12) {
+                                      val payloadLen = minOf(pkt.length - 12, 160)
+                                      for (i in 0 until payloadLen) {
+                                          outPcm[i] = alawToLinear(inBuf[12 + i])
+                                      }
+                                      player.write(outPcm, 0, payloadLen)
+                                  }
+                              }
+                          } catch (_: Exception) {
+                          } finally {
+                              try { recorder.stop(); recorder.release() } catch (_: Exception) {}
+                              try { player.stop(); player.release() } catch (_: Exception) {}
+                          }
+                      }
+                  }
+
+                  private fun linearToAlaw(pcmVal: Short): Byte {
+                      var pcm = pcmVal.toInt()
+                      val mask: Int
+                      if (pcm >= 0) { mask = 0xD5 } else { mask = 0x55; pcm = -pcm - 1 }
+                      if (pcm > 32635) pcm = 32635
+                      val exp: Int
+                      val mant: Int
+                      if (pcm >= 256) {
+                          var seg = 0
+                          var v = pcm shr 8
+                          while (v > 1) { v = v shr 1; seg++ }
+                          exp = seg + 1
+                          mant = (pcm shr (seg + 3)) and 0x0F
                       } else {
-                          SipAudioEngine.prepareForIncomingAudio()
-                          HotspotLanBridge.send("DIAL", targetNumber)
-                          val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
-                              putExtra("CALLER_NUMBER", targetNumber)
-                              putExtra("IS_OUTGOING", true)
-                              putExtra("IS_LOCAL_FALLBACK", false)
-                          }
-                          startActivity(callIntent)
+                          exp = 0
+                          mant = pcm shr 4
                       }
+                      return ((exp shl 4 or mant) xor mask).toByte()
+                  }
+
+                  private fun alawToLinear(alawByte: Byte): Short {
+                      val a = alawByte.toInt() xor 0x55
+                      var t = (a and 0x0F) shl 4
+                      val seg = (a and 0x70) shr 4
+                      when (seg) {
+                          0 -> t += 8
+                          1 -> t += 0x108
+                          else -> { t += 0x108; t = t shl (seg - 1) }
+                      }
+                      return (if ((a and 0x80) != 0) t else -t).toShort()
+                  }
+
+                  private fun md5(input: String): String {
+                      val bytes = MessageDigest.getInstance("MD5").digest(input.toByteArray())
+                      return bytes.joinToString("") { "%02x".format(it) }
+                  }
+
+                  fun prepareForIncomingAudio() {
+                      awaitingAutoAnswer = true
+                  }
+
+                  fun terminateAudioCall() {
+                      awaitingAutoAnswer = false
+                      isCallActive = false
+                      setSpeakerphone(false)
+                      rtpJob?.cancel()
+                      try { rtpSocket?.close() } catch (_: Exception) {}
+                  }
+
+                  fun sendDtmf(digit: Char) {}
+
+                  fun setMuted(muted: Boolean) {
+                      isMicMuted = muted
+                  }
+
+                  fun setSpeakerphone(enabled: Boolean) {
+                      val am = appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+                      am.mode = AudioManager.MODE_IN_COMMUNICATION
+                      am.isSpeakerphoneOn = enabled
                   }
               }
+          """)
 
-              override fun onConnectionChanged(connected: Boolean) {
-                  tvConnectionStatus.text = if (connected) {
-                      "● Note 10 Lite ⇄ S25 Ultra Bağlı (Aktif)"
-                  } else {
-                      "● Bağlantı Bekleniyor..."
+          write_file("app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt", """
+              package com.example.remotephone
+
+              import android.app.Notification
+              import android.app.NotificationChannel
+              import android.app.NotificationManager
+              import android.app.PendingIntent
+              import android.app.Service
+              import android.content.Context
+              import android.content.Intent
+              import android.content.pm.ServiceInfo
+              import android.net.wifi.WifiManager
+              import android.os.Build
+              import android.os.IBinder
+              import android.os.PowerManager
+              import androidx.core.app.NotificationCompat
+              import androidx.core.app.ServiceCompat
+
+              class BridgeKeepAliveService : Service(), HotspotLanBridge.Listener {
+
+                  companion object {
+                      private const val CHANNEL_ID = "RemotePhoneKeepAliveChannel"
+                      private const val CALL_CHANNEL_ID = "IncomingRemoteCallChannel"
+                      private const val NOTIFICATION_ID = 1001
+                      const val CALL_NOTIFICATION_ID = 2002
                   }
-              }
 
-              private fun setupGoogleDialpad(etDialNumber: EditText) {
-                  val keys = listOf(
-                      R.id.key1 to Pair("1", ToneGenerator.TONE_DTMF_1),
-                      R.id.key2 to Pair("2", ToneGenerator.TONE_DTMF_2),
-                      R.id.key3 to Pair("3", ToneGenerator.TONE_DTMF_3),
-                      R.id.key4 to Pair("4", ToneGenerator.TONE_DTMF_4),
-                      R.id.key5 to Pair("5", ToneGenerator.TONE_DTMF_5),
-                      R.id.key6 to Pair("6", ToneGenerator.TONE_DTMF_6),
-                      R.id.key7 to Pair("7", ToneGenerator.TONE_DTMF_7),
-                      R.id.key8 to Pair("8", ToneGenerator.TONE_DTMF_8),
-                      R.id.key9 to Pair("9", ToneGenerator.TONE_DTMF_9),
-                      R.id.keyStar to Pair("*", ToneGenerator.TONE_DTMF_S),
-                      R.id.key0 to Pair("0", ToneGenerator.TONE_DTMF_0),
-                      R.id.keyHash to Pair("#", ToneGenerator.TONE_DTMF_P)
-                  )
+                  private var wakeLock: PowerManager.WakeLock? = null
+                  private var wifiLock: WifiManager.WifiLock? = null
 
-                  for ((id, info) in keys) {
-                      val btn = findViewById<Button>(id)
-                      btn.setOnClickListener {
-                          toneGenerator?.startTone(info.second, 120)
-                          etDialNumber.append(info.first)
-                          SipAudioEngine.sendDtmf(info.first[0])
+                  override fun onCreate() {
+                      super.onCreate()
+                      createNotificationChannels()
+                      acquireHardwareLocks()
+                      HotspotLanBridge.addListener(this)
+                  }
+
+                  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      val mode = intent?.getStringExtra("MODE") ?: prefs.getString("saved_mode", "NONE") ?: "NONE"
+
+                      val roleText = when (mode) {
+                          "HOST" -> "1. Telefon (Note 10 Lite Ana Hat) Aktif"
+                          "CLIENT" -> "2. Telefon (S25 Ultra Uzak Ahize) Aktif"
+                          else -> "Servis Hazır"
                       }
-                      if (id == R.id.key0) {
-                          btn.setOnLongClickListener {
-                              etDialNumber.append("+")
-                              true
-                          }
+
+                      val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                          .setContentTitle("Telefon Köprüsü")
+                          .setContentText(roleText)
+                          .setSmallIcon(android.R.drawable.sym_action_call)
+                          .setOngoing(true)
+                          .setPriority(NotificationCompat.PRIORITY_LOW)
+                          .build()
+
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                          ServiceCompat.startForeground(
+                              this,
+                              NOTIFICATION_ID,
+                              notification,
+                              ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                          )
+                      } else {
+                          startForeground(NOTIFICATION_ID, notification)
+                      }
+
+                      if (mode == "HOST") {
+                          HostInCallService.sipBridgeDidNumber = prefs.getString("sip_number", "") ?: ""
+                          HotspotLanBridge.startHostServer()
+                      } else if (mode == "CLIENT") {
+                          SipAudioEngine.initAndRegister(
+                              this,
+                              prefs.getString("sip_user", "") ?: "",
+                              prefs.getString("sip_pass", "") ?: "",
+                              prefs.getString("sip_domain", "") ?: ""
+                          )
+                          HotspotLanBridge.startClientAutoConnect(this)
+                      }
+
+                      return START_STICKY
+                  }
+
+                  override fun onEvent(event: String, data: String) {
+                      if (event == "INCOMING") {
+                          showIncomingCallNotification(data, isLocalHostFallback = false)
+                      } else if (event == "ENDED") {
+                          val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                          nm.cancel(CALL_NOTIFICATION_ID)
                       }
                   }
 
-                  val btnBackspace = findViewById<Button>(R.id.btnBackspace)
-                  btnBackspace.setOnClickListener {
-                      val text = etDialNumber.text.toString()
-                      if (text.isNotEmpty()) {
-                          etDialNumber.setText(text.dropLast(1))
-                      }
-                  }
-                  btnBackspace.setOnLongClickListener {
-                      etDialNumber.setText("")
-                      true
-                  }
-              }
+                  fun showIncomingCallNotification(callerPayload: String, isLocalHostFallback: Boolean) {
+                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      val (rawNumber, resolvedName) = ContactHelper.resolveCallerInfo(this, callerPayload)
+                      val displayTitle = resolvedName ?: rawNumber
+                      val displaySubText = if (resolvedName != null) "$rawNumber • Gelen Arama" else "Gelen Arama"
 
-              @SuppressLint("BatteryLife")
-              private fun requestBatteryOptimizationExemption() {
-                  val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                      val fullScreenIntent = Intent(this, RemoteCallActivity::class.java).apply {
+                          flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                          putExtra("CALLER_NUMBER", callerPayload)
+                          putExtra("IS_OUTGOING", false)
+                          putExtra("IS_LOCAL_FALLBACK", isLocalHostFallback)
+                      }
+                      val fullScreenPendingIntent = PendingIntent.getActivity(
+                          this, 0, fullScreenIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+
+                      val notification = NotificationCompat.Builder(this, CALL_CHANNEL_ID)
+                          .setSmallIcon(android.R.drawable.sym_call_incoming)
+                          .setContentTitle(displayTitle)
+                          .setContentText(displaySubText)
+                          .setPriority(NotificationCompat.PRIORITY_MAX)
+                          .setCategory(NotificationCompat.CATEGORY_CALL)
+                          .setFullScreenIntent(fullScreenPendingIntent, true)
+                          .setOngoing(true)
+                          .setAutoCancel(true)
+                          .build()
+
+                      nm.notify(CALL_NOTIFICATION_ID, notification)
                       try {
-                          val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                              data = Uri.parse("package:$packageName")
-                          }
-                          startActivity(intent)
+                          startActivity(fullScreenIntent)
                       } catch (_: Exception) {}
                   }
-              }
 
-              private fun checkFullScreenIntentPermission() {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                      if (!nm.canUseFullScreenIntent()) {
-                          try {
-                              val intent = Intent(
-                                  Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
-                                  Uri.parse("package:$packageName")
+                  private fun acquireHardwareLocks() {
+                      val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                      wakeLock = powerManager.newWakeLock(
+                          PowerManager.PARTIAL_WAKE_LOCK,
+                          "RemotePhone::BridgeWakeLock"
+                      ).apply {
+                          setReferenceCounted(false)
+                          acquire()
+                      }
+
+                      val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                      val lockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                          WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                      } else {
+                          @Suppress("DEPRECATION")
+                          WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                      }
+                      wifiLock = wifiManager.createWifiLock(lockMode, "RemotePhone::BridgeWifiLock").apply {
+                          setReferenceCounted(false)
+                          acquire()
+                      }
+                  }
+
+                  override fun onDestroy() {
+                      HotspotLanBridge.removeListener(this)
+                      try {
+                          if (wakeLock?.isHeld == true) wakeLock?.release()
+                          if (wifiLock?.isHeld == true) wifiLock?.release()
+                      } catch (_: Exception) {}
+                      super.onDestroy()
+                  }
+
+                  override fun onBind(intent: Intent?): IBinder? = null
+
+                  private fun createNotificationChannels() {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          val nm = getSystemService(NotificationManager::class.java)
+                          nm.createNotificationChannel(
+                              NotificationChannel(
+                                  CHANNEL_ID,
+                                  "Arka Plan Bağlantı Servisi",
+                                  NotificationManager.IMPORTANCE_LOW
                               )
+                          )
+                          nm.createNotificationChannel(
+                              NotificationChannel(
+                                  CALL_CHANNEL_ID,
+                                  "Gelen Çağrı Uyarıları",
+                                  NotificationManager.IMPORTANCE_HIGH
+                              ).apply {
+                                  lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                              }
+                          )
+                      }
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/example/remotephone/HostInCallService.kt", """
+              package com.example.remotephone
+
+              import android.annotation.SuppressLint
+              import android.content.Context
+              import android.content.Intent
+              import android.net.Uri
+              import android.os.Bundle
+              import android.telecom.Call
+              import android.telecom.CallAudioState
+              import android.telecom.InCallService
+              import android.telecom.TelecomManager
+              import android.telecom.VideoProfile
+
+              class HostInCallService : InCallService(), HotspotLanBridge.Listener {
+
+                  companion object {
+                      var instance: HostInCallService? = null
+                      var sipBridgeDidNumber: String = ""
+                  }
+
+                  private var isOutgoingBridgeMode = false
+                  private var targetExternalCall: Call? = null
+                  private var sipBridgeCall: Call? = null
+
+                  override fun onCreate() {
+                      super.onCreate()
+                      instance = this
+                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      if (sipBridgeDidNumber.isEmpty()) {
+                          sipBridgeDidNumber = prefs.getString("sip_number", "") ?: ""
+                      }
+                      HotspotLanBridge.addListener(this)
+                  }
+
+                  override fun onDestroy() {
+                      HotspotLanBridge.removeListener(this)
+                      instance = null
+                      super.onDestroy()
+                  }
+
+                  override fun onEvent(event: String, data: String) {
+                      when (event) {
+                          "ANSWER" -> {
+                              calls.firstOrNull { it.state == Call.STATE_RINGING }?.reject(false, null)
+                          }
+                          "REJECT" -> {
+                              if (isOutgoingBridgeMode) {
+                                  hangupAllCalls()
+                              } else {
+                                  silenceRinger()
+                              }
+                          }
+                          "DIAL" -> {
+                              if (data.isNotEmpty() && sipBridgeDidNumber.isNotEmpty()) {
+                                  startOutgoingConferenceBridge(data)
+                              }
+                          }
+                      }
+                  }
+
+                  @SuppressLint("MissingPermission")
+                  private fun startOutgoingConferenceBridge(targetNumber: String) {
+                      isOutgoingBridgeMode = true
+                      targetExternalCall = null
+                      sipBridgeCall = null
+
+                      val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+                      tm.placeCall(Uri.parse("tel:" + Uri.encode(targetNumber)), Bundle())
+                  }
+
+                  @SuppressLint("MissingPermission")
+                  private fun dialSipBridgeNumber() {
+                      val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+                      tm.placeCall(Uri.parse("tel:" + Uri.encode(sipBridgeDidNumber)), Bundle())
+                  }
+
+                  override fun onCallAdded(call: Call) {
+                      super.onCallAdded(call)
+                      val number = call.details?.handle?.schemeSpecificPart ?: "Bilinmeyen Numara"
+
+                      if (isOutgoingBridgeMode) {
+                          if (targetExternalCall == null) {
+                              targetExternalCall = call
+                          } else if (sipBridgeCall == null) {
+                              sipBridgeCall = call
+                          }
+                      }
+
+                      call.registerCallback(object : Call.Callback() {
+                          override fun onStateChanged(call: Call, state: Int) {
+                              when (state) {
+                                  Call.STATE_ACTIVE -> {
+                                      if (isOutgoingBridgeMode) {
+                                          if (call == targetExternalCall && sipBridgeCall == null) {
+                                              HotspotLanBridge.send("OUTGOING_RINGING_SIP")
+                                              dialSipBridgeNumber()
+                                          } else if (call == sipBridgeCall && targetExternalCall != null) {
+                                              targetExternalCall?.conference(sipBridgeCall)
+                                              setMuted(true)
+                                              HotspotLanBridge.send("OUTGOING_CONNECTED")
+                                          }
+                                      }
+                                  }
+                                  Call.STATE_DISCONNECTED -> {
+                                      if (isOutgoingBridgeMode) {
+                                          hangupAllCalls()
+                                      } else {
+                                          HotspotLanBridge.send("ENDED")
+                                      }
+                                  }
+                              }
+                          }
+                      })
+
+                      if (!isOutgoingBridgeMode && call.state == Call.STATE_RINGING) {
+                          val hostContactName = ContactHelper.getContactName(this, number) ?: ""
+                          val callerPayload = "$number~$hostContactName"
+
+                          if (HotspotLanBridge.isConnected) {
+                              HotspotLanBridge.send("INCOMING", callerPayload)
+                          } else {
+                              val intent = Intent(this, RemoteCallActivity::class.java).apply {
+                                  flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                  putExtra("CALLER_NUMBER", callerPayload)
+                                  putExtra("IS_OUTGOING", false)
+                                  putExtra("IS_LOCAL_FALLBACK", true)
+                              }
+                              startActivity(intent)
+                          }
+                      }
+                  }
+
+                  fun answerLocalCall() {
+                      calls.firstOrNull { it.state == Call.STATE_RINGING }
+                          ?.answer(VideoProfile.STATE_AUDIO_ONLY)
+                  }
+
+                  fun setLocalSpeaker(enabled: Boolean) {
+                      setAudioRoute(if (enabled) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE)
+                  }
+
+                  fun setLocalMute(muted: Boolean) {
+                      setMuted(muted)
+                  }
+
+                  fun hangupAllCalls() {
+                      isOutgoingBridgeMode = false
+                      setMuted(false)
+                      calls.forEach {
+                          if (it.state == Call.STATE_RINGING) it.reject(false, null) else it.disconnect()
+                      }
+                      targetExternalCall = null
+                      sipBridgeCall = null
+                      HotspotLanBridge.send("ENDED")
+                  }
+
+                  @SuppressLint("MissingPermission")
+                  fun configureForwarding(context: Context, sipNumber: String, enable: Boolean) {
+                      sipBridgeDidNumber = sipNumber
+                      val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+                      val ussd = if (enable) "*67*$sipNumber#" else "#67#"
+                      tm.placeCall(Uri.parse("tel:" + Uri.encode(ussd)), Bundle())
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/example/remotephone/RemoteCallActivity.kt", """
+              package com.example.remotephone
+
+              import android.app.NotificationManager
+              import android.content.Context
+              import android.graphics.Color
+              import android.media.Ringtone
+              import android.media.RingtoneManager
+              import android.os.Bundle
+              import android.os.PowerManager
+              import android.os.SystemClock
+              import android.view.View
+              import android.widget.Chronometer
+              import android.widget.LinearLayout
+              import android.widget.Space
+              import android.widget.TextView
+              import androidx.appcompat.app.AppCompatActivity
+              import com.google.android.material.button.MaterialButton
+
+              class RemoteCallActivity : AppCompatActivity(), HotspotLanBridge.Listener {
+
+                  private var ringtone: Ringtone? = null
+                  private var proximityWakeLock: PowerManager.WakeLock? = null
+                  private var isMuted = false
+                  private var isSpeakerOn = false
+                  private var isLocalFallback = false
+                  private var rawPhoneNumber: String = ""
+                  private var resolvedContactName: String? = null
+
+                  private lateinit var tvCallerNumber: TextView
+                  private lateinit var tvCallStatus: TextView
+                  private lateinit var chronometer: Chronometer
+                  private lateinit var layoutInCallControls: LinearLayout
+                  private lateinit var btnAnswer: MaterialButton
+                  private lateinit var spaceBetween: Space
+
+                  override fun onCreate(savedInstanceState: Bundle?) {
+                      super.onCreate(savedInstanceState)
+                      setContentView(R.layout.activity_remote_call)
+
+                      val isOutgoing = intent.getBooleanExtra("IS_OUTGOING", false)
+                      isLocalFallback = intent.getBooleanExtra("IS_LOCAL_FALLBACK", false)
+                      val callerPayload = intent.getStringExtra("CALLER_NUMBER") ?: "Bilinmeyen Numara"
+
+                      val (number, name) = ContactHelper.resolveCallerInfo(this, callerPayload)
+                      rawPhoneNumber = number
+                      resolvedContactName = name
+
+                      tvCallerNumber = findViewById(R.id.tvCallerNumber)
+                      tvCallStatus = findViewById(R.id.tvCallStatus)
+                      chronometer = findViewById(R.id.chronometerCallTimer)
+                      layoutInCallControls = findViewById(R.id.layoutInCallControls)
+                      btnAnswer = findViewById(R.id.btnAnswer)
+                      val btnReject = findViewById<MaterialButton>(R.id.btnReject)
+                      spaceBetween = findViewById(R.id.spaceBetweenCallButtons)
+                      val btnMute = findViewById<MaterialButton>(R.id.btnMute)
+                      val btnSpeaker = findViewById<MaterialButton>(R.id.btnSpeaker)
+
+                      if (!resolvedContactName.isNullOrEmpty()) {
+                          tvCallerNumber.text = resolvedContactName
+                      } else {
+                          tvCallerNumber.text = rawPhoneNumber
+                      }
+
+                      acquireProximitySensorLock()
+                      HotspotLanBridge.addListener(this)
+
+                      if (isOutgoing) {
+                          updateStatusText("Aranıyor...")
+                          btnAnswer.visibility = View.GONE
+                          spaceBetween.visibility = View.GONE
+                      } else {
+                          updateStatusText("Gelen arama...")
+                          val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                          ringtone = RingtoneManager.getRingtone(applicationContext, ringtoneUri)?.apply { play() }
+                      }
+
+                      SipAudioEngine.onCallConnected = {
+                          runOnUiThread { switchToActiveCallUi() }
+                      }
+
+                      SipAudioEngine.onCallTerminated = {
+                          runOnUiThread { cleanupAndFinish() }
+                      }
+
+                      btnMute.setOnClickListener {
+                          isMuted = !isMuted
+                          if (isLocalFallback) {
+                              HostInCallService.instance?.setLocalMute(isMuted)
+                          } else {
+                              SipAudioEngine.setMuted(isMuted)
+                          }
+                          btnMute.setBackgroundColor(if (isMuted) Color.parseColor("#8AB4F8") else Color.parseColor("#2D3135"))
+                          btnMute.setTextColor(if (isMuted) Color.parseColor("#1A1C1E") else Color.parseColor("#E3E3E3"))
+                      }
+
+                      btnSpeaker.setOnClickListener {
+                          isSpeakerOn = !isSpeakerOn
+                          if (isLocalFallback) {
+                              HostInCallService.instance?.setLocalSpeaker(isSpeakerOn)
+                          } else {
+                              SipAudioEngine.setSpeakerphone(isSpeakerOn)
+                          }
+                          btnSpeaker.setBackgroundColor(if (isSpeakerOn) Color.parseColor("#8AB4F8") else Color.parseColor("#2D3135"))
+                          btnSpeaker.setTextColor(if (isSpeakerOn) Color.parseColor("#1A1C1E") else Color.parseColor("#E3E3E3"))
+                      }
+
+                      btnAnswer.setOnClickListener {
+                          ringtone?.stop()
+                          btnAnswer.isEnabled = false
+                          if (isLocalFallback) {
+                              HostInCallService.instance?.answerLocalCall()
+                              switchToActiveCallUi()
+                          } else {
+                              updateStatusText("Bağlanıyor...")
+                              SipAudioEngine.prepareForIncomingAudio()
+                              HotspotLanBridge.send("ANSWER")
+                          }
+                      }
+
+                      btnReject.setOnClickListener {
+                          if (isLocalFallback) {
+                              HostInCallService.instance?.hangupAllCalls()
+                          } else {
+                              SipAudioEngine.terminateAudioCall()
+                              HotspotLanBridge.send("REJECT")
+                          }
+                          cleanupAndFinish()
+                      }
+                  }
+
+                  private fun updateStatusText(status: String) {
+                      tvCallStatus.text = if (!resolvedContactName.isNullOrEmpty()) {
+                          "$rawPhoneNumber • $status"
+                      } else {
+                          status
+                      }
+                  }
+
+                  override fun onEvent(event: String, data: String) {
+                      when (event) {
+                          "OUTGOING_RINGING_SIP" -> updateStatusText("Karşı taraf açtı, bağlanıyor...")
+                          "OUTGOING_CONNECTED" -> switchToActiveCallUi()
+                          "ENDED" -> cleanupAndFinish()
+                      }
+                  }
+
+                  private fun switchToActiveCallUi() {
+                      updateStatusText("Görüşme Aktif")
+                      btnAnswer.visibility = View.GONE
+                      spaceBetween.visibility = View.GONE
+                      layoutInCallControls.visibility = View.VISIBLE
+                      if (chronometer.visibility != View.VISIBLE) {
+                          chronometer.visibility = View.VISIBLE
+                          chronometer.base = SystemClock.elapsedRealtime()
+                          chronometer.start()
+                      }
+                  }
+
+                  private fun acquireProximitySensorLock() {
+                      val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                      if (pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+                          proximityWakeLock = pm.newWakeLock(
+                              PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                              "RemotePhone::ProximityWakeLock"
+                          ).apply { acquire(60 * 60 * 1000L) }
+                      }
+                  }
+
+                  private fun cleanupAndFinish() {
+                      ringtone?.stop()
+                      chronometer.stop()
+                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      nm.cancel(BridgeKeepAliveService.CALL_NOTIFICATION_ID)
+                      finish()
+                  }
+
+                  override fun onDestroy() {
+                      HotspotLanBridge.removeListener(this)
+                      ringtone?.stop()
+                      try {
+                          if (proximityWakeLock?.isHeld == true) proximityWakeLock?.release()
+                      } catch (_: Exception) {}
+                      super.onDestroy()
+                  }
+              }
+          """)
+
+          write_file("app/src/main/java/com/example/remotephone/MainActivity.kt", """
+              package com.example.remotephone
+
+              import android.Manifest
+              import android.annotation.SuppressLint
+              import android.app.Activity
+              import android.app.NotificationManager
+              import android.app.role.RoleManager
+              import android.content.Context
+              import android.content.Intent
+              import android.content.pm.PackageManager
+              import android.media.AudioManager
+              import android.media.ToneGenerator
+              import android.net.Uri
+              import android.os.Build
+              import android.os.Bundle
+              import android.os.PowerManager
+              import android.provider.Settings
+              import android.telecom.TelecomManager
+              import android.view.View
+              import android.widget.Button
+              import android.widget.EditText
+              import android.widget.TextView
+              import android.widget.Toast
+              import androidx.activity.result.contract.ActivityResultContracts
+              import androidx.appcompat.app.AppCompatActivity
+              import androidx.core.content.ContextCompat
+              import com.google.android.material.card.MaterialCardView
+
+              class MainActivity : AppCompatActivity(), HotspotLanBridge.Listener {
+
+                  private var toneGenerator: ToneGenerator? = null
+                  private lateinit var tvConnectionStatus: TextView
+
+                  private val roleLauncher = registerForActivityResult(
+                      ActivityResultContracts.StartActivityForResult()
+                  ) { result ->
+                      if (result.resultCode == Activity.RESULT_OK) {
+                          Toast.makeText(this, "Varsayılan Telefon Uygulaması Ayarlandı", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+
+                  private val permissionLauncher = registerForActivityResult(
+                      ActivityResultContracts.RequestMultiplePermissions()
+                  ) { }
+
+                  override fun onCreate(savedInstanceState: Bundle?) {
+                      super.onCreate(savedInstanceState)
+                      setContentView(R.layout.activity_main)
+
+                      try {
+                          toneGenerator = ToneGenerator(AudioManager.STREAM_DTMF, 80)
+                      } catch (_: Exception) {}
+
+                      requestRuntimePermissions()
+                      requestBatteryOptimizationExemption()
+                      checkFullScreenIntentPermission()
+
+                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      tvConnectionStatus = findViewById(R.id.tvConnectionStatus)
+                      val cardSetupPanel = findViewById<MaterialCardView>(R.id.cardSetupPanel)
+                      val btnToggleSettings = findViewById<Button>(R.id.btnToggleSettings)
+
+                      val etSipNumber = findViewById<EditText>(R.id.etSipNumber)
+                      val etSipUser = findViewById<EditText>(R.id.etSipUser)
+                      val etSipPass = findViewById<EditText>(R.id.etSipPass)
+                      val etSipDomain = findViewById<EditText>(R.id.etSipDomain)
+                      val etDialNumber = findViewById<EditText>(R.id.etDialNumber)
+
+                      etSipNumber.setText(prefs.getString("sip_number", ""))
+                      etSipUser.setText(prefs.getString("sip_user", ""))
+                      etSipPass.setText(prefs.getString("sip_pass", ""))
+                      etSipDomain.setText(prefs.getString("sip_domain", ""))
+
+                      if (intent?.action == Intent.ACTION_DIAL || intent?.action == Intent.ACTION_VIEW) {
+                          intent?.data?.schemeSpecificPart?.let { etDialNumber.setText(it) }
+                      }
+
+                      val savedMode = prefs.getString("saved_mode", "NONE") ?: "NONE"
+                      if (savedMode != "NONE") {
+                          cardSetupPanel.visibility = View.GONE
+                          startKeepAliveService(savedMode)
+                      }
+
+                      btnToggleSettings.setOnClickListener {
+                          cardSetupPanel.visibility =
+                              if (cardSetupPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                      }
+
+                      setupGoogleDialpad(etDialNumber)
+                      HotspotLanBridge.addListener(this)
+
+                      findViewById<Button>(R.id.btnStartHost).setOnClickListener {
+                          val sipDid = etSipNumber.text.toString().trim()
+                          prefs.edit()
+                              .putString("sip_number", sipDid)
+                              .putString("saved_mode", "HOST")
+                              .apply()
+
+                          requestDefaultDialerRole()
+                          if (sipDid.isNotEmpty()) {
+                              HostInCallService().configureForwarding(this, sipDid, true)
+                          }
+                          startKeepAliveService("HOST")
+                          cardSetupPanel.visibility = View.GONE
+                          tvConnectionStatus.text = "● Note 10 Lite (Ana Hat) Aktif - Hotspot Açık Olmalı"
+                      }
+
+                      findViewById<Button>(R.id.btnStartClient).setOnClickListener {
+                          val user = etSipUser.text.toString().trim()
+                          val pass = etSipPass.text.toString().trim()
+                          val domain = etSipDomain.text.toString().trim()
+
+                          prefs.edit()
+                              .putString("sip_user", user)
+                              .putString("sip_pass", pass)
+                              .putString("sip_domain", domain)
+                              .putString("saved_mode", "CLIENT")
+                              .apply()
+
+                          checkFullScreenIntentPermission()
+                          startKeepAliveService("CLIENT")
+                          cardSetupPanel.visibility = View.GONE
+                          tvConnectionStatus.text = "● S25 Ultra (Uzak Ahize) - Bağlanıyor..."
+                      }
+
+                      @SuppressLint("MissingPermission")
+                      findViewById<Button>(R.id.btnMakeCall).setOnClickListener {
+                          val targetNumber = etDialNumber.text.toString().trim()
+                          if (targetNumber.isEmpty()) {
+                              Toast.makeText(this, "Lütfen numara çevirin", Toast.LENGTH_SHORT).show()
+                              return@setOnClickListener
+                          }
+
+                          val currentMode = prefs.getString("saved_mode", "CLIENT")
+                          if (currentMode == "HOST" && !HotspotLanBridge.isConnected) {
+                              val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+                              tm.placeCall(Uri.parse("tel:" + Uri.encode(targetNumber)), Bundle())
+                              val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
+                                  putExtra("CALLER_NUMBER", targetNumber)
+                                  putExtra("IS_OUTGOING", true)
+                                  putExtra("IS_LOCAL_FALLBACK", true)
+                              }
+                              startActivity(callIntent)
+                          } else {
+                              SipAudioEngine.prepareForIncomingAudio()
+                              HotspotLanBridge.send("DIAL", targetNumber)
+                              val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
+                                  putExtra("CALLER_NUMBER", targetNumber)
+                                  putExtra("IS_OUTGOING", true)
+                                  putExtra("IS_LOCAL_FALLBACK", false)
+                              }
+                              startActivity(callIntent)
+                          }
+                      }
+                  }
+
+                  override fun onConnectionChanged(connected: Boolean) {
+                      tvConnectionStatus.text = if (connected) {
+                          "● Note 10 Lite ⇄ S25 Ultra Bağlı (Aktif)"
+                      } else {
+                          "● Bağlantı Bekleniyor..."
+                      }
+                  }
+
+                  private fun setupGoogleDialpad(etDialNumber: EditText) {
+                      val keys = listOf(
+                          R.id.key1 to Pair("1", ToneGenerator.TONE_DTMF_1),
+                          R.id.key2 to Pair("2", ToneGenerator.TONE_DTMF_2),
+                          R.id.key3 to Pair("3", ToneGenerator.TONE_DTMF_3),
+                          R.id.key4 to Pair("4", ToneGenerator.TONE_DTMF_4),
+                          R.id.key5 to Pair("5", ToneGenerator.TONE_DTMF_5),
+                          R.id.key6 to Pair("6", ToneGenerator.TONE_DTMF_6),
+                          R.id.key7 to Pair("7", ToneGenerator.TONE_DTMF_7),
+                          R.id.key8 to Pair("8", ToneGenerator.TONE_DTMF_8),
+                          R.id.key9 to Pair("9", ToneGenerator.TONE_DTMF_9),
+                          R.id.keyStar to Pair("*", ToneGenerator.TONE_DTMF_S),
+                          R.id.key0 to Pair("0", ToneGenerator.TONE_DTMF_0),
+                          R.id.keyHash to Pair("#", ToneGenerator.TONE_DTMF_P)
+                      )
+
+                      for ((id, info) in keys) {
+                          val btn = findViewById<Button>(id)
+                          btn.setOnClickListener {
+                              toneGenerator?.startTone(info.second, 120)
+                              etDialNumber.append(info.first)
+                              SipAudioEngine.sendDtmf(info.first[0])
+                          }
+                          if (id == R.id.key0) {
+                              btn.setOnLongClickListener {
+                                  etDialNumber.append("+")
+                                  true
+                              }
+                          }
+                      }
+
+                      val btnBackspace = findViewById<Button>(R.id.btnBackspace)
+                      btnBackspace.setOnClickListener {
+                          val text = etDialNumber.text.toString()
+                          if (text.isNotEmpty()) {
+                              etDialNumber.setText(text.dropLast(1))
+                          }
+                      }
+                      btnBackspace.setOnLongClickListener {
+                          etDialNumber.setText("")
+                          true
+                      }
+                  }
+
+                  @SuppressLint("BatteryLife")
+                  private fun requestBatteryOptimizationExemption() {
+                      val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                      if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                          try {
+                              val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                  data = Uri.parse("package:$packageName")
+                              }
                               startActivity(intent)
                           } catch (_: Exception) {}
                       }
                   }
-              }
 
-              private fun startKeepAliveService(mode: String) {
-                  val serviceIntent = Intent(this, BridgeKeepAliveService::class.java).apply {
-                      putExtra("MODE", mode)
+                  private fun checkFullScreenIntentPermission() {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                          val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                          if (!nm.canUseFullScreenIntent()) {
+                              try {
+                                  val intent = Intent(
+                                      Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                      Uri.parse("package:$packageName")
+                                  )
+                                  startActivity(intent)
+                              } catch (_: Exception) {}
+                          }
+                      }
                   }
-                  ContextCompat.startForegroundService(this, serviceIntent)
-              }
 
-              private fun requestDefaultDialerRole() {
-                  val roleManager = getSystemService(Context.ROLE_SERVICE) as RoleManager
-                  if (roleManager.isRoleAvailable(RoleManager.ROLE_DIALER) &&
-                      !roleManager.isRoleHeld(RoleManager.ROLE_DIALER)
-                  ) {
-                      roleLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER))
+                  private fun startKeepAliveService(mode: String) {
+                      val serviceIntent = Intent(this, BridgeKeepAliveService::class.java).apply {
+                          putExtra("MODE", mode)
+                      }
+                      ContextCompat.startForegroundService(this, serviceIntent)
+                  }
+
+                  private fun requestDefaultDialerRole() {
+                      val roleManager = getSystemService(Context.ROLE_SERVICE) as RoleManager
+                      if (roleManager.isRoleAvailable(RoleManager.ROLE_DIALER) &&
+                          !roleManager.isRoleHeld(RoleManager.ROLE_DIALER)
+                      ) {
+                          roleLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER))
+                      }
+                  }
+
+                  private fun requestRuntimePermissions() {
+                      val permissions = mutableListOf(
+                          Manifest.permission.READ_PHONE_STATE,
+                          Manifest.permission.CALL_PHONE,
+                          Manifest.permission.ANSWER_PHONE_CALLS,
+                          Manifest.permission.RECORD_AUDIO,
+                          Manifest.permission.READ_CONTACTS
+                      )
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                          permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                      }
+                      val missing = permissions.filter {
+                          ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+                      }
+                      if (missing.isNotEmpty()) {
+                          permissionLauncher.launch(missing.toTypedArray())
+                      }
+                  }
+
+                  override fun onDestroy() {
+                      HotspotLanBridge.removeListener(this)
+                      toneGenerator?.release()
+                      super.onDestroy()
                   }
               }
+          """)
 
-              private fun requestRuntimePermissions() {
-                  val permissions = mutableListOf(
-                      Manifest.permission.READ_PHONE_STATE,
-                      Manifest.permission.CALL_PHONE,
-                      Manifest.permission.ANSWER_PHONE_CALLS,
-                      Manifest.permission.RECORD_AUDIO,
-                      Manifest.permission.READ_CONTACTS
-                  )
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                      permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-                  }
-                  val missing = permissions.filter {
-                      ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-                  }
-                  if (missing.isNotEmpty()) {
-                      permissionLauncher.launch(missing.toTypedArray())
-                  }
-              }
-
-              override fun onDestroy() {
-                  HotspotLanBridge.removeListener(this)
-                  toneGenerator?.release()
-                  super.onDestroy()
-              }
-          }
-          EOF
-
-          cat << 'EOF' | sed 's/^          //' > app/src/main/res/layout/activity_main.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              xmlns:app="http://schemas.android.com/apk/res-auto"
-              android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:background="#F8F9FA">
-
-              <LinearLayout
+          write_file("app/src/main/res/layout/activity_main.xml", """
+              <?xml version="1.0" encoding="utf-8"?>
+              <androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+                  xmlns:app="http://schemas.android.com/apk/res-auto"
                   android:layout_width="match_parent"
                   android:layout_height="match_parent"
-                  android:orientation="vertical"
-                  android:padding="16dp">
+                  android:background="#F8F9FA">
 
                   <LinearLayout
                       android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:gravity="center_vertical"
-                      android:orientation="horizontal">
-
-                      <TextView
-                          android:id="@+id/tvConnectionStatus"
-                          android:layout_width="0dp"
-                          android:layout_height="wrap_content"
-                          android:layout_weight="1"
-                          android:background="@android:drawable/dialog_holo_light_frame"
-                          android:paddingHorizontal="14dp"
-                          android:paddingVertical="8dp"
-                          android:text="● Bağlantı Bekleniyor"
-                          android:textColor="#1F1F1F"
-                          android:textSize="13sp"
-                          android:textStyle="bold" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/btnToggleSettings"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="wrap_content"
-                          android:layout_height="44dp"
-                          android:layout_marginStart="8dp"
-                          android:text="Kurulum"
-                          android:textSize="13sp" />
-                  </LinearLayout>
-
-                  <com.google.android.material.card.MaterialCardView
-                      android:id="@+id/cardSetupPanel"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:layout_marginTop="10dp"
-                      android:visibility="visible"
-                      app:cardBackgroundColor="#FFFFFF"
-                      app:cardCornerRadius="20dp"
-                      app:cardElevation="2dp">
+                      android:layout_height="match_parent"
+                      android:orientation="vertical"
+                      android:padding="16dp">
 
                       <LinearLayout
                           android:layout_width="match_parent"
                           android:layout_height="wrap_content"
-                          android:orientation="vertical"
-                          android:padding="16dp">
+                          android:gravity="center_vertical"
+                          android:orientation="horizontal">
 
                           <TextView
-                              android:layout_width="wrap_content"
+                              android:id="@+id/tvConnectionStatus"
+                              android:layout_width="0dp"
                               android:layout_height="wrap_content"
-                              android:text="Cihaz Rolü ve SIP Yapılandırması"
-                              android:textColor="#1A73E8"
-                              android:textSize="14sp"
+                              android:layout_weight="1"
+                              android:background="@android:drawable/dialog_holo_light_frame"
+                              android:paddingHorizontal="14dp"
+                              android:paddingVertical="8dp"
+                              android:text="● Bağlantı Bekleniyor"
+                              android:textColor="#1F1F1F"
+                              android:textSize="13sp"
                               android:textStyle="bold" />
 
-                          <EditText
-                              android:id="@+id/etSipNumber"
-                              android:layout_width="match_parent"
-                              android:layout_height="wrap_content"
-                              android:layout_marginTop="6dp"
-                              android:hint="Note 10 Lite Hedef SIP No (0850XXXXXXX)"
-                              android:inputType="phone"
-                              android:textSize="14sp" />
-
                           <com.google.android.material.button.MaterialButton
-                              android:id="@+id/btnStartHost"
-                              android:layout_width="match_parent"
+                              android:id="@+id/btnToggleSettings"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="wrap_content"
                               android:layout_height="44dp"
-                              android:text="1. Telefon (Note 10 Lite) Başlat"
-                              app:backgroundTint="#1A73E8" />
+                              android:layout_marginStart="8dp"
+                              android:text="Kurulum"
+                              android:textSize="13sp" />
+                      </LinearLayout>
 
-                          <View
-                              android:layout_width="match_parent"
-                              android:layout_height="1dp"
-                              android:layout_marginVertical="8dp"
-                              android:background="#E0E0E0" />
+                      <com.google.android.material.card.MaterialCardView
+                          android:id="@+id/cardSetupPanel"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginTop="10dp"
+                          android:visibility="visible"
+                          app:cardBackgroundColor="#FFFFFF"
+                          app:cardCornerRadius="20dp"
+                          app:cardElevation="2dp">
 
                           <LinearLayout
                               android:layout_width="match_parent"
                               android:layout_height="wrap_content"
-                              android:orientation="horizontal">
+                              android:orientation="vertical"
+                              android:padding="16dp">
+
+                              <TextView
+                                  android:layout_width="wrap_content"
+                                  android:layout_height="wrap_content"
+                                  android:text="Cihaz Rolü ve SIP Yapılandırması"
+                                  android:textColor="#1A73E8"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold" />
 
                               <EditText
-                                  android:id="@+id/etSipUser"
-                                  android:layout_width="0dp"
+                                  android:id="@+id/etSipNumber"
+                                  android:layout_width="match_parent"
                                   android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:hint="SIP Kullanıcı"
-                                  android:textSize="13sp" />
+                                  android:layout_marginTop="6dp"
+                                  android:hint="Note 10 Lite Hedef SIP No (0850XXXXXXX)"
+                                  android:inputType="phone"
+                                  android:textSize="14sp" />
+
+                              <com.google.android.material.button.MaterialButton
+                                  android:id="@+id/btnStartHost"
+                                  android:layout_width="match_parent"
+                                  android:layout_height="44dp"
+                                  android:text="1. Telefon (Note 10 Lite) Başlat"
+                                  app:backgroundTint="#1A73E8" />
+
+                              <View
+                                  android:layout_width="match_parent"
+                                  android:layout_height="1dp"
+                                  android:layout_marginVertical="8dp"
+                                  android:background="#E0E0E0" />
+
+                              <LinearLayout
+                                  android:layout_width="match_parent"
+                                  android:layout_height="wrap_content"
+                                  android:orientation="horizontal">
+
+                                  <EditText
+                                      android:id="@+id/etSipUser"
+                                      android:layout_width="0dp"
+                                      android:layout_height="wrap_content"
+                                      android:layout_weight="1"
+                                      android:hint="SIP Kullanıcı"
+                                      android:textSize="13sp" />
+
+                                  <EditText
+                                      android:id="@+id/etSipPass"
+                                      android:layout_width="0dp"
+                                      android:layout_height="wrap_content"
+                                      android:layout_marginStart="6dp"
+                                      android:layout_weight="1"
+                                      android:hint="SIP Şifre"
+                                      android:inputType="textPassword"
+                                      android:textSize="13sp" />
+                              </LinearLayout>
 
                               <EditText
-                                  android:id="@+id/etSipPass"
-                                  android:layout_width="0dp"
+                                  android:id="@+id/etSipDomain"
+                                  android:layout_width="match_parent"
                                   android:layout_height="wrap_content"
-                                  android:layout_marginStart="6dp"
-                                  android:layout_weight="1"
-                                  android:hint="SIP Şifre"
-                                  android:inputType="textPassword"
+                                  android:hint="SIP Sunucu (Örn: sip.netgsm.com.tr)"
                                   android:textSize="13sp" />
+
+                              <com.google.android.material.button.MaterialButton
+                                  android:id="@+id/btnStartClient"
+                                  android:layout_width="match_parent"
+                                  android:layout_height="44dp"
+                                  android:text="2. Telefon (S25 Ultra) Başlat"
+                                  app:backgroundTint="#1E8E3E" />
                           </LinearLayout>
+                      </com.google.android.material.card.MaterialCardView>
+
+                      <Space
+                          android:layout_width="match_parent"
+                          android:layout_height="0dp"
+                          android:layout_weight="1" />
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:gravity="center_vertical"
+                          android:orientation="horizontal"
+                          android:paddingHorizontal="12dp"
+                          android:paddingBottom="12dp">
 
                           <EditText
-                              android:id="@+id/etSipDomain"
-                              android:layout_width="match_parent"
+                              android:id="@+id/etDialNumber"
+                              android:layout_width="0dp"
                               android:layout_height="wrap_content"
-                              android:hint="SIP Sunucu (Örn: sip.netgsm.com.tr)"
-                              android:textSize="13sp" />
+                              android:layout_weight="1"
+                              android:background="@null"
+                              android:focusable="false"
+                              android:gravity="center"
+                              android:hint="Numara girin"
+                              android:letterSpacing="0.06"
+                              android:singleLine="true"
+                              android:textColor="#1F1F1F"
+                              android:textSize="32sp"
+                              android:textStyle="bold" />
 
                           <com.google.android.material.button.MaterialButton
-                              android:id="@+id/btnStartClient"
-                              android:layout_width="match_parent"
-                              android:layout_height="44dp"
-                              android:text="2. Telefon (S25 Ultra) Başlat"
-                              app:backgroundTint="#1E8E3E" />
+                              android:id="@+id/btnBackspace"
+                              style="@style/Widget.Material3.Button.TextButton"
+                              android:layout_width="48dp"
+                              android:layout_height="48dp"
+                              android:text="⌫"
+                              android:textColor="#5F6368"
+                              android:textSize="22sp" />
                       </LinearLayout>
+
+                      <GridLayout
+                          android:id="@+id/dialpadGrid"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:alignmentMode="alignMargins"
+                          android:columnCount="3"
+                          android:paddingHorizontal="16dp"
+                          android:rowCount="4">
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/key1"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="1"
+                              android:textSize="24sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/key2"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="2\nABC"
+                              android:textSize="18sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/key3"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="3\nDEF"
+                              android:textSize="18sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/key4"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="4\nGHI"
+                              android:textSize="18sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/key5"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="5\nJKL"
+                              android:textSize="18sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/key6"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="6\nMNO"
+                              android:textSize="18sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/key7"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="7\nPQRS"
+                              android:textSize="18sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/key8"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="8\nTUV"
+                              android:textSize="18sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/key9"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="9\nWXYZ"
+                              android:textSize="18sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/keyStar"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="*"
+                              android:textSize="24sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/key0"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="0\n+"
+                              android:textSize="18sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/keyHash"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="0dp"
+                              android:layout_height="64dp"
+                              android:layout_columnWeight="1"
+                              android:layout_margin="6dp"
+                              android:text="#"
+                              android:textSize="24sp"
+                              app:backgroundTint="#E8EAED"
+                              app:cornerRadius="32dp" />
+                      </GridLayout>
+
+                      <com.google.android.material.button.MaterialButton
+                          android:id="@+id/btnMakeCall"
+                          android:layout_width="160dp"
+                          android:layout_height="64dp"
+                          android:layout_gravity="center_horizontal"
+                          android:layout_marginTop="12dp"
+                          android:layout_marginBottom="8dp"
+                          android:text="Ara"
+                          android:textColor="#FFFFFF"
+                          android:textSize="18sp"
+                          android:textStyle="bold"
+                          app:backgroundTint="#1E8E3E"
+                          app:cornerRadius="32dp"
+                          app:icon="@android:drawable/sym_action_call"
+                          app:iconGravity="textStart"
+                          app:iconTint="#FFFFFF" />
+
+                  </LinearLayout>
+              </androidx.coordinatorlayout.widget.CoordinatorLayout>
+          """)
+
+          write_file("app/src/main/res/layout/activity_remote_call.xml", """
+              <?xml version="1.0" encoding="utf-8"?>
+              <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+                  xmlns:app="http://schemas.android.com/apk/res-auto"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:background="#1A1C1E"
+                  android:gravity="center_horizontal"
+                  android:orientation="vertical"
+                  android:padding="28dp">
+
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="12dp"
+                      android:letterSpacing="0.1"
+                      android:text="TELEFON GÖRÜŞMESİ"
+                      android:textColor="#8AB4F8"
+                      android:textSize="12sp"
+                      android:textStyle="bold" />
+
+                  <com.google.android.material.card.MaterialCardView
+                      android:layout_width="104dp"
+                      android:layout_height="104dp"
+                      android:layout_marginTop="28dp"
+                      app:cardBackgroundColor="#2D3135"
+                      app:cardCornerRadius="52dp"
+                      app:cardElevation="0dp">
+
+                      <ImageView
+                          android:layout_width="52dp"
+                          android:layout_height="52dp"
+                          android:layout_gravity="center"
+                          android:src="@android:drawable/ic_menu_myplaces"
+                          app:tint="#E3E3E3" />
                   </com.google.android.material.card.MaterialCardView>
+
+                  <TextView
+                      android:id="@+id/tvCallerNumber"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="24dp"
+                      android:gravity="center"
+                      android:text="0555 000 00 00"
+                      android:textColor="#E3E3E3"
+                      android:textSize="32sp"
+                      android:textStyle="bold" />
+
+                  <TextView
+                      android:id="@+id/tvCallStatus"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="8dp"
+                      android:gravity="center"
+                      android:text="Gelen arama..."
+                      android:textColor="#9AA0A6"
+                      android:textSize="17sp" />
+
+                  <Chronometer
+                      android:id="@+id/chronometerCallTimer"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="6dp"
+                      android:textColor="#81C995"
+                      android:textSize="18sp"
+                      android:visibility="gone" />
 
                   <Space
                       android:layout_width="match_parent"
@@ -1471,360 +1893,80 @@ jobs:
                       android:layout_weight="1" />
 
                   <LinearLayout
+                      android:id="@+id/layoutInCallControls"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:gravity="center_vertical"
+                      android:layout_marginBottom="36dp"
+                      android:gravity="center"
                       android:orientation="horizontal"
-                      android:paddingHorizontal="12dp"
-                      android:paddingBottom="12dp">
-
-                      <EditText
-                          android:id="@+id/etDialNumber"
-                          android:layout_width="0dp"
-                          android:layout_height="wrap_content"
-                          android:layout_weight="1"
-                          android:background="@null"
-                          android:focusable="false"
-                          android:gravity="center"
-                          android:hint="Numara girin"
-                          android:letterSpacing="0.06"
-                          android:singleLine="true"
-                          android:textColor="#1F1F1F"
-                          android:textSize="32sp"
-                          android:textStyle="bold" />
+                      android:visibility="gone">
 
                       <com.google.android.material.button.MaterialButton
-                          android:id="@+id/btnBackspace"
-                          style="@style/Widget.Material3.Button.TextButton"
-                          android:layout_width="48dp"
-                          android:layout_height="48dp"
-                          android:text="⌫"
-                          android:textColor="#5F6368"
-                          android:textSize="22sp" />
+                          android:id="@+id/btnMute"
+                          style="@style/Widget.Material3.Button.TonalButton"
+                          android:layout_width="110dp"
+                          android:layout_height="72dp"
+                          android:layout_marginEnd="16dp"
+                          android:text="Sessiz"
+                          android:textColor="#E3E3E3"
+                          app:backgroundTint="#2D3135"
+                          app:cornerRadius="36dp" />
+
+                      <com.google.android.material.button.MaterialButton
+                          android:id="@+id/btnSpeaker"
+                          style="@style/Widget.Material3.Button.TonalButton"
+                          android:layout_width="110dp"
+                          android:layout_height="72dp"
+                          android:layout_marginStart="16dp"
+                          android:text="Hoparlör"
+                          android:textColor="#E3E3E3"
+                          app:backgroundTint="#2D3135"
+                          app:cornerRadius="36dp" />
                   </LinearLayout>
 
-                  <GridLayout
-                      android:id="@+id/dialpadGrid"
+                  <LinearLayout
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:alignmentMode="alignMargins"
-                      android:columnCount="3"
-                      android:paddingHorizontal="16dp"
-                      android:rowCount="4">
+                      android:layout_marginBottom="20dp"
+                      android:gravity="center"
+                      android:orientation="horizontal">
 
                       <com.google.android.material.button.MaterialButton
-                          android:id="@+id/key1"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="1"
-                          android:textSize="24sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
+                          android:id="@+id/btnReject"
+                          android:layout_width="84dp"
+                          android:layout_height="84dp"
+                          android:insetLeft="0dp"
+                          android:insetTop="0dp"
+                          android:insetRight="0dp"
+                          android:insetBottom="0dp"
+                          android:text="Kapat"
+                          android:textColor="#FFFFFF"
+                          android:textSize="13sp"
+                          app:backgroundTint="#D93025"
+                          app:cornerRadius="42dp" />
+
+                      <Space
+                          android:id="@+id/spaceBetweenCallButtons"
+                          android:layout_width="72dp"
+                          android:layout_height="wrap_content" />
 
                       <com.google.android.material.button.MaterialButton
-                          android:id="@+id/key2"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="2\nABC"
-                          android:textSize="18sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/key3"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="3\nDEF"
-                          android:textSize="18sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/key4"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="4\nGHI"
-                          android:textSize="18sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/key5"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="5\nJKL"
-                          android:textSize="18sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/key6"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="6\nMNO"
-                          android:textSize="18sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/key7"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="7\nPQRS"
-                          android:textSize="18sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/key8"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="8\nTUV"
-                          android:textSize="18sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/key9"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="9\nWXYZ"
-                          android:textSize="18sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/keyStar"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="*"
-                          android:textSize="24sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/key0"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="0\n+"
-                          android:textSize="18sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-
-                      <com.google.android.material.button.MaterialButton
-                          android:id="@+id/keyHash"
-                          style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="0dp"
-                          android:layout_height="64dp"
-                          android:layout_columnWeight="1"
-                          android:layout_margin="6dp"
-                          android:text="#"
-                          android:textSize="24sp"
-                          app:backgroundTint="#E8EAED"
-                          app:cornerRadius="32dp" />
-                  </GridLayout>
-
-                  <com.google.android.material.button.MaterialButton
-                      android:id="@+id/btnMakeCall"
-                      android:layout_width="160dp"
-                      android:layout_height="64dp"
-                      android:layout_gravity="center_horizontal"
-                      android:layout_marginTop="12dp"
-                      android:layout_marginBottom="8dp"
-                      android:text="Ara"
-                      android:textColor="#FFFFFF"
-                      android:textSize="18sp"
-                      android:textStyle="bold"
-                      app:backgroundTint="#1E8E3E"
-                      app:cornerRadius="32dp"
-                      app:icon="@android:drawable/sym_action_call"
-                      app:iconGravity="textStart"
-                      app:iconTint="#FFFFFF" />
+                          android:id="@+id/btnAnswer"
+                          android:layout_width="84dp"
+                          android:layout_height="84dp"
+                          android:insetLeft="0dp"
+                          android:insetTop="0dp"
+                          android:insetRight="0dp"
+                          android:insetBottom="0dp"
+                          android:text="Yanıtla"
+                          android:textColor="#FFFFFF"
+                          android:textSize="13sp"
+                          app:backgroundTint="#1E8E3E"
+                          app:cornerRadius="42dp" />
+                  </LinearLayout>
 
               </LinearLayout>
-          </androidx.coordinatorlayout.widget.CoordinatorLayout>
-          EOF
-
-          cat << 'EOF' | sed 's/^          //' > app/src/main/res/layout/activity_remote_call.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              xmlns:app="http://schemas.android.com/apk/res-auto"
-              android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:background="#1A1C1E"
-              android:gravity="center_horizontal"
-              android:orientation="vertical"
-              android:padding="28dp">
-
-              <TextView
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:layout_marginTop="12dp"
-                  android:letterSpacing="0.1"
-                  android:text="TELEFON GÖRÜŞMESİ"
-                  android:textColor="#8AB4F8"
-                  android:textSize="12sp"
-                  android:textStyle="bold" />
-
-              <com.google.android.material.card.MaterialCardView
-                  android:layout_width="104dp"
-                  android:layout_height="104dp"
-                  android:layout_marginTop="28dp"
-                  app:cardBackgroundColor="#2D3135"
-                  app:cardCornerRadius="52dp"
-                  app:cardElevation="0dp">
-
-                  <ImageView
-                      android:layout_width="52dp"
-                      android:layout_height="52dp"
-                      android:layout_gravity="center"
-                      android:src="@android:drawable/ic_menu_myplaces"
-                      app:tint="#E3E3E3" />
-              </com.google.android.material.card.MaterialCardView>
-
-              <TextView
-                  android:id="@+id/tvCallerNumber"
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:layout_marginTop="24dp"
-                  android:gravity="center"
-                  android:text="0555 000 00 00"
-                  android:textColor="#E3E3E3"
-                  android:textSize="32sp"
-                  android:textStyle="bold" />
-
-              <TextView
-                  android:id="@+id/tvCallStatus"
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:layout_marginTop="8dp"
-                  android:gravity="center"
-                  android:text="Gelen arama..."
-                  android:textColor="#9AA0A6"
-                  android:textSize="17sp" />
-
-              <Chronometer
-                  android:id="@+id/chronometerCallTimer"
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:layout_marginTop="6dp"
-                  android:textColor="#81C995"
-                  android:textSize="18sp"
-                  android:visibility="gone" />
-
-              <Space
-                  android:layout_width="match_parent"
-                  android:layout_height="0dp"
-                  android:layout_weight="1" />
-
-              <LinearLayout
-                  android:id="@+id/layoutInCallControls"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:layout_marginBottom="36dp"
-                  android:gravity="center"
-                  android:orientation="horizontal"
-                  android:visibility="gone">
-
-                  <com.google.android.material.button.MaterialButton
-                      android:id="@+id/btnMute"
-                      style="@style/Widget.Material3.Button.TonalButton"
-                      android:layout_width="110dp"
-                      android:layout_height="72dp"
-                      android:layout_marginEnd="16dp"
-                      android:text="Sessiz"
-                      android:textColor="#E3E3E3"
-                      app:backgroundTint="#2D3135"
-                      app:cornerRadius="36dp" />
-
-                  <com.google.android.material.button.MaterialButton
-                      android:id="@+id/btnSpeaker"
-                      style="@style/Widget.Material3.Button.TonalButton"
-                      android:layout_width="110dp"
-                      android:layout_height="72dp"
-                      android:layout_marginStart="16dp"
-                      android:text="Hoparlör"
-                      android:textColor="#E3E3E3"
-                      app:backgroundTint="#2D3135"
-                      app:cornerRadius="36dp" />
-              </LinearLayout>
-
-              <LinearLayout
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:layout_marginBottom="20dp"
-                  android:gravity="center"
-                  android:orientation="horizontal">
-
-                  <com.google.android.material.button.MaterialButton
-                      android:id="@+id/btnReject"
-                      android:layout_width="84dp"
-                      android:layout_height="84dp"
-                      android:insetLeft="0dp"
-                      android:insetTop="0dp"
-                      android:insetRight="0dp"
-                      android:insetBottom="0dp"
-                      android:text="Kapat"
-                      android:textColor="#FFFFFF"
-                      android:textSize="13sp"
-                      app:backgroundTint="#D93025"
-                      app:cornerRadius="42dp" />
-
-                  <Space
-                      android:id="@+id/spaceBetweenCallButtons"
-                      android:layout_width="72dp"
-                      android:layout_height="wrap_content" />
-
-                  <com.google.android.material.button.MaterialButton
-                      android:id="@+id/btnAnswer"
-                      android:layout_width="84dp"
-                      android:layout_height="84dp"
-                      android:insetLeft="0dp"
-                      android:insetTop="0dp"
-                      android:insetRight="0dp"
-                      android:insetBottom="0dp"
-                      android:text="Yanıtla"
-                      android:textColor="#FFFFFF"
-                      android:textSize="13sp"
-                      app:backgroundTint="#1E8E3E"
-                      app:cornerRadius="42dp" />
-              </LinearLayout>
-
-          </LinearLayout>
-          EOF
+          """)
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -1843,5 +1985,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v2.2.1-APK
+          name: RemotePhone-v2.3.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
