@@ -26,7 +26,7 @@ jobs:
               with open(path, "w", encoding="utf-8") as f:
                   f.write(textwrap.dedent(content).lstrip())
 
-          write_file("settings.gradle.kts", """
+          write_file("settings.gradle.kts", r"""
               pluginManagement {
                   repositories {
                       google()
@@ -45,21 +45,21 @@ jobs:
               include(":app")
           """)
 
-          write_file("build.gradle.kts", """
+          write_file("build.gradle.kts", r"""
               plugins {
                   id("com.android.application") version "8.5.2" apply false
                   id("org.jetbrains.kotlin.android") version "1.9.24" apply false
               }
           """)
 
-          write_file("gradle.properties", """
+          write_file("gradle.properties", r"""
               org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
               android.useAndroidX=true
               kotlin.code.style=official
               android.nonTransitiveRClass=true
           """)
 
-          write_file("app/build.gradle.kts", """
+          write_file("app/build.gradle.kts", r"""
               plugins {
                   id("com.android.application")
                   id("org.jetbrains.kotlin.android")
@@ -73,8 +73,8 @@ jobs:
                       applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 11
-                      versionName = "2.6.0"
+                      versionCode = 12
+                      versionName = "2.6.1"
                   }
 
                   buildTypes {
@@ -100,7 +100,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/AndroidManifest.xml", """
+          write_file("app/src/main/AndroidManifest.xml", r"""
               <?xml version="1.0" encoding="utf-8"?>
               <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -190,7 +190,7 @@ jobs:
               </manifest>
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/ContactHelper.kt", """
+          write_file("app/src/main/java/com/example/remotephone/ContactHelper.kt", r"""
               package com.example.remotephone
 
               import android.Manifest
@@ -306,7 +306,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/HotspotLanBridge.kt", """
+          write_file("app/src/main/java/com/example/remotephone/HotspotLanBridge.kt", r"""
               package com.example.remotephone
 
               import android.content.Context
@@ -481,7 +481,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/SipAudioEngine.kt", """
+          write_file("app/src/main/java/com/example/remotephone/SipAudioEngine.kt", r"""
               package com.example.remotephone
 
               import android.annotation.SuppressLint
@@ -502,8 +502,8 @@ jobs:
                   private var sipSocket: DatagramSocket? = null
                   private var rtpSocket: DatagramSocket? = null
 
-                  private val CRLF = "\\r\\n"
-                  private val Q = '"'
+                  private val CRLF = "" + Char(13) + Char(10)
+                  private val Q = Char(34)
 
                   @Volatile
                   var awaitingAutoAnswer = false
@@ -762,7 +762,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt", """
+          write_file("app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt", r"""
               package com.example.remotephone
 
               import android.app.Notification
@@ -964,7 +964,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/HostInCallService.kt", """
+          write_file("app/src/main/java/com/example/remotephone/HostInCallService.kt", r"""
               package com.example.remotephone
 
               import android.annotation.SuppressLint
@@ -1138,7 +1138,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/RemoteCallActivity.kt", """
+          write_file("app/src/main/java/com/example/remotephone/RemoteCallActivity.kt", r"""
               package com.example.remotephone
 
               import android.app.NotificationManager
@@ -1326,7 +1326,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/MainActivity.kt", """
+          write_file("app/src/main/java/com/example/remotephone/MainActivity.kt", r"""
               package com.example.remotephone
 
               import android.Manifest
@@ -1369,6 +1369,7 @@ jobs:
                   private var toneGenerator: ToneGenerator? = null
                   private lateinit var tvConnectionStatus: TextView
                   private lateinit var etDialNumber: EditText
+                  private val NL = Char(10)
 
                   private val roleLauncher = registerForActivityResult(
                       ActivityResultContracts.StartActivityForResult()
@@ -1387,7 +1388,6 @@ jobs:
                       super.onCreate(savedInstanceState)
                       setContentView(R.layout.activity_main)
 
-                      // Yüksek sesli ve belirgin DTMF ton üreticisi (%100 ses seviyesi)
                       try {
                           toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, ToneGenerator.MAX_VOLUME)
                       } catch (_: Exception) {
@@ -1523,6 +1523,10 @@ jobs:
                       } catch (_: Exception) {}
                   }
 
+                  private fun formatContactRow(item: ContactItem): String {
+                      return item.name + NL + item.number
+                  }
+
                   private fun showContactsDialog() {
                       if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
                           != PackageManager.PERMISSION_GRANTED
@@ -1553,7 +1557,7 @@ jobs:
                       val adapter = ArrayAdapter(
                           this,
                           android.R.layout.simple_list_item_1,
-                          displayedContacts.map { "${it.name}\n${it.number}" }.toMutableList()
+                          displayedContacts.map { formatContactRow(it) }.toMutableList()
                       )
                       listView.adapter = adapter
 
@@ -1581,7 +1585,7 @@ jobs:
                                   )
                               }
                               adapter.clear()
-                              adapter.addAll(displayedContacts.map { "${it.name}\n${it.number}" })
+                              adapter.addAll(displayedContacts.map { formatContactRow(it) })
                               adapter.notifyDataSetChanged()
                           }
                           override fun afterTextChanged(s: Editable?) {}
@@ -1591,7 +1595,7 @@ jobs:
                           val selected = displayedContacts.getOrNull(position)
                           if (selected != null) {
                               etDialNumber.setText(selected.number)
-                              Toast.makeText(this, "${selected.name} seçildi", Toast.LENGTH_SHORT).show()
+                              Toast.makeText(this@MainActivity, "${selected.name} seçildi", Toast.LENGTH_SHORT).show()
                               dialog.dismiss()
                           }
                       }
@@ -1725,7 +1729,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/res/layout/activity_main.xml", """
+          write_file("app/src/main/res/layout/activity_main.xml", r"""
               <?xml version="1.0" encoding="utf-8"?>
               <androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
                   xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -2145,7 +2149,7 @@ jobs:
               </androidx.coordinatorlayout.widget.CoordinatorLayout>
           """)
 
-          write_file("app/src/main/res/layout/activity_remote_call.xml", """
+          write_file("app/src/main/res/layout/activity_remote_call.xml", r"""
               <?xml version="1.0" encoding="utf-8"?>
               <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
                   xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -2323,5 +2327,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v2.6.0-APK
+          name: RemotePhone-v2.6.1-APK
           path: app/build/outputs/apk/debug/app-debug.apk
