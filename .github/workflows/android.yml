@@ -73,8 +73,8 @@ jobs:
                       applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 9
-                      versionName = "2.4.1"
+                      versionCode = 11
+                      versionName = "2.6.0"
                   }
 
                   buildTypes {
@@ -128,7 +128,7 @@ jobs:
                       android:allowBackup="true"
                       android:label="Telefon"
                       android:supportsRtl="true"
-                      android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+                      android:theme="@style/Theme.Material3.Dark.NoActionBar">
 
                       <activity
                           android:name=".MainActivity"
@@ -200,25 +200,99 @@ jobs:
               import android.provider.ContactsContract
               import androidx.core.content.ContextCompat
 
+              data class ContactItem(val name: String, val number: String)
+
               object ContactHelper {
+                  @Volatile
+                  var syncedHostContacts: List<ContactItem> = emptyList()
+
                   fun getContactName(context: Context, phoneNumber: String): String? {
                       val cleanNumber = phoneNumber.trim()
                       if (cleanNumber.isEmpty()) return null
                       if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS)
-                          != PackageManager.PERMISSION_GRANTED
-                      ) return null
+                          == PackageManager.PERMISSION_GRANTED
+                      ) {
+                          try {
+                              val uri = Uri.withAppendedPath(
+                                  ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                                  Uri.encode(cleanNumber)
+                              )
+                              val projection = arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME)
+                              context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                                  if (cursor.moveToFirst()) return cursor.getString(0)
+                              }
+                          } catch (_: Exception) {}
+                      }
+                      val normalizedTarget = cleanNumber.filter { it.isDigit() }.takeLast(10)
+                      if (normalizedTarget.length >= 7) {
+                          syncedHostContacts.firstOrNull {
+                              it.number.filter { c -> c.isDigit() }.takeLast(10) == normalizedTarget
+                          }?.let { return it.name }
+                      }
+                      return null
+                  }
 
-                      return try {
-                          val uri = Uri.withAppendedPath(
-                              ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-                              Uri.encode(cleanNumber)
-                          )
-                          val projection = arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME)
-                          context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                              if (cursor.moveToFirst()) cursor.getString(0) else null
+                  fun getAllContacts(context: Context): List<ContactItem> {
+                      val map = linkedMapOf<String, ContactItem>()
+                      if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS)
+                          == PackageManager.PERMISSION_GRANTED
+                      ) {
+                          try {
+                              val projection = arrayOf(
+                                  ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                                  ContactsContract.CommonDataKinds.Phone.NUMBER
+                              )
+                              context.contentResolver.query(
+                                  ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                                  projection,
+                                  null,
+                                  null,
+                                  ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+                              )?.use { cursor ->
+                                  val nameIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                                  val numIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                                  while (cursor.moveToNext()) {
+                                      val name = if (nameIdx >= 0) cursor.getString(nameIdx) ?: "" else ""
+                                      val rawNum = if (numIdx >= 0) cursor.getString(numIdx) ?: "" else ""
+                                      val cleanNum = rawNum.replace(" ", "").replace("-", "")
+                                      if (name.isNotBlank() && cleanNum.isNotBlank()) {
+                                          val key = cleanNum.filter { it.isDigit() }.takeLast(10).ifEmpty { cleanNum }
+                                          if (!map.containsKey(key)) {
+                                              map[key] = ContactItem(name.trim(), cleanNum)
+                                          }
+                                      }
+                                  }
+                              }
+                          } catch (_: Exception) {}
+                      }
+                      for (item in syncedHostContacts) {
+                          val key = item.number.filter { it.isDigit() }.takeLast(10).ifEmpty { item.number }
+                          if (!map.containsKey(key)) {
+                              map[key] = item
                           }
-                      } catch (_: Exception) {
-                          null
+                      }
+                      return map.values.sortedBy { it.name.lowercase() }
+                  }
+
+                  fun serializeContacts(context: Context): String {
+                      return getAllContacts(context).take(500).joinToString(";") { item ->
+                          val safeName = item.name.replace(";", " ").replace("~", " ").replace("|", " ")
+                          val safeNum = item.number.replace(";", "").replace("~", "").replace("|", "")
+                          "$safeName~$safeNum"
+                      }
+                  }
+
+                  fun updateSyncedContacts(serialized: String) {
+                      if (serialized.isBlank()) return
+                      val list = mutableListOf<ContactItem>()
+                      for (entry in serialized.split(";")) {
+                          val parts = entry.split("~", limit = 2)
+                          if (parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) {
+                              list.add(ContactItem(parts[0], parts[1]))
+                          }
+                      }
+                      if (list.isNotEmpty()) {
+                          syncedHostContacts = list
                       }
                   }
 
@@ -770,12 +844,31 @@ jobs:
                       return START_STICKY
                   }
 
+                  override fun onConnectionChanged(connected: Boolean) {
+                      if (connected) {
+                          val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                          if (prefs.getString("saved_mode", "") == "CLIENT") {
+                              HotspotLanBridge.send("REQ_CONTACTS")
+                          }
+                      }
+                  }
+
                   override fun onEvent(event: String, data: String) {
-                      if (event == "INCOMING") {
-                          showIncomingCallNotification(data, isLocalHostFallback = false)
-                      } else if (event == "ENDED") {
-                          val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                          nm.cancel(CALL_NOTIFICATION_ID)
+                      when (event) {
+                          "INCOMING" -> showIncomingCallNotification(data, isLocalHostFallback = false)
+                          "ENDED" -> {
+                              val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                              nm.cancel(CALL_NOTIFICATION_ID)
+                          }
+                          "REQ_CONTACTS" -> {
+                              val payload = ContactHelper.serializeContacts(this)
+                              if (payload.isNotEmpty()) {
+                                  HotspotLanBridge.send("RES_CONTACTS", payload)
+                              }
+                          }
+                          "RES_CONTACTS" -> {
+                              ContactHelper.updateSyncedContacts(data)
+                          }
                       }
                   }
 
@@ -1137,8 +1230,8 @@ jobs:
                           } else {
                               SipAudioEngine.setMuted(isMuted)
                           }
-                          btnMute.setBackgroundColor(if (isMuted) Color.parseColor("#8AB4F8") else Color.parseColor("#2D3135"))
-                          btnMute.setTextColor(if (isMuted) Color.parseColor("#1A1C1E") else Color.parseColor("#E3E3E3"))
+                          btnMute.setBackgroundColor(if (isMuted) Color.parseColor("#8AB4F8") else Color.parseColor("#282C34"))
+                          btnMute.setTextColor(if (isMuted) Color.parseColor("#0F1115") else Color.parseColor("#FFFFFF"))
                       }
 
                       btnSpeaker.setOnClickListener {
@@ -1148,8 +1241,8 @@ jobs:
                           } else {
                               SipAudioEngine.setSpeakerphone(isSpeakerOn)
                           }
-                          btnSpeaker.setBackgroundColor(if (isSpeakerOn) Color.parseColor("#8AB4F8") else Color.parseColor("#2D3135"))
-                          btnSpeaker.setTextColor(if (isSpeakerOn) Color.parseColor("#1A1C1E") else Color.parseColor("#E3E3E3"))
+                          btnSpeaker.setBackgroundColor(if (isSpeakerOn) Color.parseColor("#8AB4F8") else Color.parseColor("#282C34"))
+                          btnSpeaker.setTextColor(if (isSpeakerOn) Color.parseColor("#0F1115") else Color.parseColor("#FFFFFF"))
                       }
 
                       btnAnswer.setOnClickListener {
@@ -1250,14 +1343,23 @@ jobs:
               import android.os.Build
               import android.os.Bundle
               import android.os.PowerManager
+              import android.os.VibrationEffect
+              import android.os.Vibrator
               import android.provider.Settings
               import android.telecom.TelecomManager
+              import android.text.Editable
+              import android.text.TextWatcher
+              import android.view.HapticFeedbackConstants
               import android.view.View
+              import android.widget.ArrayAdapter
               import android.widget.Button
               import android.widget.EditText
+              import android.widget.LinearLayout
+              import android.widget.ListView
               import android.widget.TextView
               import android.widget.Toast
               import androidx.activity.result.contract.ActivityResultContracts
+              import androidx.appcompat.app.AlertDialog
               import androidx.appcompat.app.AppCompatActivity
               import androidx.core.content.ContextCompat
               import com.google.android.material.card.MaterialCardView
@@ -1266,6 +1368,7 @@ jobs:
 
                   private var toneGenerator: ToneGenerator? = null
                   private lateinit var tvConnectionStatus: TextView
+                  private lateinit var etDialNumber: EditText
 
                   private val roleLauncher = registerForActivityResult(
                       ActivityResultContracts.StartActivityForResult()
@@ -1284,9 +1387,14 @@ jobs:
                       super.onCreate(savedInstanceState)
                       setContentView(R.layout.activity_main)
 
+                      // Yüksek sesli ve belirgin DTMF ton üreticisi (%100 ses seviyesi)
                       try {
-                          toneGenerator = ToneGenerator(AudioManager.STREAM_DTMF, 80)
-                      } catch (_: Exception) {}
+                          toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, ToneGenerator.MAX_VOLUME)
+                      } catch (_: Exception) {
+                          try {
+                              toneGenerator = ToneGenerator(AudioManager.STREAM_DTMF, ToneGenerator.MAX_VOLUME)
+                          } catch (_: Exception) {}
+                      }
 
                       requestRuntimePermissions()
                       requestBatteryOptimizationExemption()
@@ -1301,7 +1409,7 @@ jobs:
                       val etSipUser = findViewById<EditText>(R.id.etSipUser)
                       val etSipPass = findViewById<EditText>(R.id.etSipPass)
                       val etSipDomain = findViewById<EditText>(R.id.etSipDomain)
-                      val etDialNumber = findViewById<EditText>(R.id.etDialNumber)
+                      etDialNumber = findViewById(R.id.etDialNumber)
 
                       etSipNumber.setText(prefs.getString("sip_number", ""))
                       etSipUser.setText(prefs.getString("sip_user", ""))
@@ -1321,6 +1429,13 @@ jobs:
                       btnToggleSettings.setOnClickListener {
                           cardSetupPanel.visibility =
                               if (cardSetupPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                      }
+
+                      findViewById<Button>(R.id.btnContacts).setOnClickListener {
+                          if (HotspotLanBridge.isConnected) {
+                              HotspotLanBridge.send("REQ_CONTACTS")
+                          }
+                          showContactsDialog()
                       }
 
                       setupGoogleDialpad(etDialNumber)
@@ -1363,7 +1478,7 @@ jobs:
                       findViewById<Button>(R.id.btnMakeCall).setOnClickListener {
                           val targetNumber = etDialNumber.text.toString().trim()
                           if (targetNumber.isEmpty()) {
-                              Toast.makeText(this, "Lütfen numara çevirin", Toast.LENGTH_SHORT).show()
+                              Toast.makeText(this, "Lütfen numara çevirin veya rehberden seçin", Toast.LENGTH_SHORT).show()
                               return@setOnClickListener
                           }
 
@@ -1388,6 +1503,100 @@ jobs:
                               startActivity(callIntent)
                           }
                       }
+                  }
+
+                  private fun playStrongKeyFeedback(view: View, dtmfTone: Int) {
+                      try {
+                          toneGenerator?.stopTone()
+                          toneGenerator?.startTone(dtmfTone, 160)
+                      } catch (_: Exception) {}
+
+                      view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                      try {
+                          val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              vibrator?.vibrate(VibrationEffect.createOneShot(25, VibrationEffect.DEFAULT_AMPLITUDE))
+                          } else {
+                              @Suppress("DEPRECATION")
+                              vibrator?.vibrate(25)
+                          }
+                      } catch (_: Exception) {}
+                  }
+
+                  private fun showContactsDialog() {
+                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
+                          != PackageManager.PERMISSION_GRANTED
+                      ) {
+                          permissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS))
+                          Toast.makeText(this, "Rehber izni verdikten sonra tekrar dokunun", Toast.LENGTH_SHORT).show()
+                          return
+                      }
+
+                      val allContacts = ContactHelper.getAllContacts(this)
+                      if (allContacts.isEmpty()) {
+                          Toast.makeText(this, "Rehberde kayıtlı kişi bulunamadı", Toast.LENGTH_SHORT).show()
+                          return
+                      }
+
+                      val container = LinearLayout(this).apply {
+                          orientation = LinearLayout.VERTICAL
+                          setPadding(36, 24, 36, 12)
+                      }
+
+                      val searchInput = EditText(this).apply {
+                          hint = "Kişi veya numara ara..."
+                          isSingleLine = true
+                      }
+
+                      val listView = ListView(this)
+                      val displayedContacts = allContacts.toMutableList()
+                      val adapter = ArrayAdapter(
+                          this,
+                          android.R.layout.simple_list_item_1,
+                          displayedContacts.map { "${it.name}\n${it.number}" }.toMutableList()
+                      )
+                      listView.adapter = adapter
+
+                      container.addView(searchInput)
+                      container.addView(listView)
+
+                      val dialog = AlertDialog.Builder(this)
+                          .setTitle("Rehber (${allContacts.size} Kişi)")
+                          .setView(container)
+                          .setNegativeButton("Kapat", null)
+                          .create()
+
+                      searchInput.addTextChangedListener(object : TextWatcher {
+                          override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                          override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                              val q = s?.toString()?.trim()?.lowercase() ?: ""
+                              displayedContacts.clear()
+                              if (q.isEmpty()) {
+                                  displayedContacts.addAll(allContacts)
+                              } else {
+                                  displayedContacts.addAll(
+                                      allContacts.filter {
+                                          it.name.lowercase().contains(q) || it.number.contains(q)
+                                      }
+                                  )
+                              }
+                              adapter.clear()
+                              adapter.addAll(displayedContacts.map { "${it.name}\n${it.number}" })
+                              adapter.notifyDataSetChanged()
+                          }
+                          override fun afterTextChanged(s: Editable?) {}
+                      })
+
+                      listView.setOnItemClickListener { _, _, position, _ ->
+                          val selected = displayedContacts.getOrNull(position)
+                          if (selected != null) {
+                              etDialNumber.setText(selected.number)
+                              Toast.makeText(this, "${selected.name} seçildi", Toast.LENGTH_SHORT).show()
+                              dialog.dismiss()
+                          }
+                      }
+
+                      dialog.show()
                   }
 
                   override fun onConnectionChanged(connected: Boolean) {
@@ -1417,12 +1626,13 @@ jobs:
                       for ((id, info) in keys) {
                           val btn = findViewById<Button>(id)
                           btn.setOnClickListener {
-                              toneGenerator?.startTone(info.second, 120)
+                              playStrongKeyFeedback(it, info.second)
                               etDialNumber.append(info.first)
                               SipAudioEngine.sendDtmf(info.first[0])
                           }
                           if (id == R.id.key0) {
                               btn.setOnLongClickListener {
+                                  playStrongKeyFeedback(it, ToneGenerator.TONE_DTMF_0)
                                   etDialNumber.append("+")
                                   true
                               }
@@ -1431,12 +1641,14 @@ jobs:
 
                       val btnBackspace = findViewById<Button>(R.id.btnBackspace)
                       btnBackspace.setOnClickListener {
+                          it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                           val text = etDialNumber.text.toString()
                           if (text.isNotEmpty()) {
                               etDialNumber.setText(text.dropLast(1))
                           }
                       }
                       btnBackspace.setOnLongClickListener {
+                          it.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                           etDialNumber.setText("")
                           true
                       }
@@ -1519,7 +1731,7 @@ jobs:
                   xmlns:app="http://schemas.android.com/apk/res-auto"
                   android:layout_width="match_parent"
                   android:layout_height="match_parent"
-                  android:background="#F8F9FA">
+                  android:background="#0F1115">
 
                   <LinearLayout
                       android:layout_width="match_parent"
@@ -1538,11 +1750,11 @@ jobs:
                               android:layout_width="0dp"
                               android:layout_height="wrap_content"
                               android:layout_weight="1"
-                              android:background="@android:drawable/dialog_holo_light_frame"
+                              android:background="#1C1F26"
                               android:paddingHorizontal="14dp"
-                              android:paddingVertical="8dp"
+                              android:paddingVertical="10dp"
                               android:text="● Bağlantı Bekleniyor"
-                              android:textColor="#1F1F1F"
+                              android:textColor="#8AB4F8"
                               android:textSize="13sp"
                               android:textStyle="bold" />
 
@@ -1553,7 +1765,9 @@ jobs:
                               android:layout_height="44dp"
                               android:layout_marginStart="8dp"
                               android:text="Kurulum"
-                              android:textSize="13sp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="13sp"
+                              app:backgroundTint="#282C34" />
                       </LinearLayout>
 
                       <com.google.android.material.card.MaterialCardView
@@ -1562,9 +1776,11 @@ jobs:
                           android:layout_height="wrap_content"
                           android:layout_marginTop="10dp"
                           android:visibility="visible"
-                          app:cardBackgroundColor="#FFFFFF"
+                          app:cardBackgroundColor="#1C1F26"
                           app:cardCornerRadius="20dp"
-                          app:cardElevation="2dp">
+                          app:cardElevation="4dp"
+                          app:strokeColor="#2E3440"
+                          app:strokeWidth="1dp">
 
                           <LinearLayout
                               android:layout_width="match_parent"
@@ -1576,7 +1792,7 @@ jobs:
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
                                   android:text="Cihaz Rolü ve SIP Yapılandırması"
-                                  android:textColor="#1A73E8"
+                                  android:textColor="#8AB4F8"
                                   android:textSize="14sp"
                                   android:textStyle="bold" />
 
@@ -1587,6 +1803,8 @@ jobs:
                                   android:layout_marginTop="6dp"
                                   android:hint="Note 10 Lite Hedef SIP No (0850XXXXXXX)"
                                   android:inputType="phone"
+                                  android:textColor="#FFFFFF"
+                                  android:textColorHint="#9AA0A6"
                                   android:textSize="14sp" />
 
                               <com.google.android.material.button.MaterialButton
@@ -1594,13 +1812,14 @@ jobs:
                                   android:layout_width="match_parent"
                                   android:layout_height="44dp"
                                   android:text="1. Telefon (Note 10 Lite) Başlat"
+                                  android:textColor="#FFFFFF"
                                   app:backgroundTint="#1A73E8" />
 
                               <View
                                   android:layout_width="match_parent"
                                   android:layout_height="1dp"
                                   android:layout_marginVertical="8dp"
-                                  android:background="#E0E0E0" />
+                                  android:background="#2E3440" />
 
                               <LinearLayout
                                   android:layout_width="match_parent"
@@ -1613,6 +1832,8 @@ jobs:
                                       android:layout_height="wrap_content"
                                       android:layout_weight="1"
                                       android:hint="SIP Kullanıcı"
+                                      android:textColor="#FFFFFF"
+                                      android:textColorHint="#9AA0A6"
                                       android:textSize="13sp" />
 
                                   <EditText
@@ -1623,6 +1844,8 @@ jobs:
                                       android:layout_weight="1"
                                       android:hint="SIP Şifre"
                                       android:inputType="textPassword"
+                                      android:textColor="#FFFFFF"
+                                      android:textColorHint="#9AA0A6"
                                       android:textSize="13sp" />
                               </LinearLayout>
 
@@ -1631,6 +1854,8 @@ jobs:
                                   android:layout_width="match_parent"
                                   android:layout_height="wrap_content"
                                   android:hint="SIP Sunucu (Örn: sip.netgsm.com.tr)"
+                                  android:textColor="#FFFFFF"
+                                  android:textColorHint="#9AA0A6"
                                   android:textSize="13sp" />
 
                               <com.google.android.material.button.MaterialButton
@@ -1638,6 +1863,7 @@ jobs:
                                   android:layout_width="match_parent"
                                   android:layout_height="44dp"
                                   android:text="2. Telefon (S25 Ultra) Başlat"
+                                  android:textColor="#FFFFFF"
                                   app:backgroundTint="#1E8E3E" />
                           </LinearLayout>
                       </com.google.android.material.card.MaterialCardView>
@@ -1652,8 +1878,23 @@ jobs:
                           android:layout_height="wrap_content"
                           android:gravity="center_vertical"
                           android:orientation="horizontal"
-                          android:paddingHorizontal="12dp"
-                          android:paddingBottom="12dp">
+                          android:paddingHorizontal="8dp"
+                          android:paddingBottom="14dp">
+
+                          <com.google.android.material.button.MaterialButton
+                              android:id="@+id/btnContacts"
+                              style="@style/Widget.Material3.Button.TonalButton"
+                              android:layout_width="56dp"
+                              android:layout_height="52dp"
+                              android:insetLeft="0dp"
+                              android:insetTop="0dp"
+                              android:insetRight="0dp"
+                              android:insetBottom="0dp"
+                              android:text="👤"
+                              android:textColor="#FFFFFF"
+                              android:textSize="22sp"
+                              app:backgroundTint="#1A73E8"
+                              app:cornerRadius="26dp" />
 
                           <EditText
                               android:id="@+id/etDialNumber"
@@ -1664,20 +1905,21 @@ jobs:
                               android:focusable="false"
                               android:gravity="center"
                               android:hint="Numara girin"
-                              android:letterSpacing="0.06"
+                              android:letterSpacing="0.08"
                               android:singleLine="true"
-                              android:textColor="#1F1F1F"
-                              android:textSize="32sp"
+                              android:textColor="#FFFFFF"
+                              android:textColorHint="#6E7681"
+                              android:textSize="34sp"
                               android:textStyle="bold" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/btnBackspace"
                               style="@style/Widget.Material3.Button.TextButton"
-                              android:layout_width="48dp"
-                              android:layout_height="48dp"
+                              android:layout_width="52dp"
+                              android:layout_height="52dp"
                               android:text="⌫"
-                              android:textColor="#5F6368"
-                              android:textSize="22sp" />
+                              android:textColor="#E8EAED"
+                              android:textSize="24sp" />
                       </LinearLayout>
 
                       <GridLayout
@@ -1686,167 +1928,215 @@ jobs:
                           android:layout_height="wrap_content"
                           android:alignmentMode="alignMargins"
                           android:columnCount="3"
-                          android:paddingHorizontal="16dp"
+                          android:paddingHorizontal="12dp"
                           android:rowCount="4">
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/key1"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="1"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/key2"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="2"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/key3"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="3"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/key4"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="4"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/key5"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="5"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/key6"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="6"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/key7"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="7"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/key8"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="8"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/key9"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="9"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/keyStar"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="*"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#8AB4F8"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/key0"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="0"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#FFFFFF"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/keyHash"
                               style="@style/Widget.Material3.Button.TonalButton"
                               android:layout_width="0dp"
-                              android:layout_height="64dp"
+                              android:layout_height="68dp"
                               android:layout_columnWeight="1"
                               android:layout_margin="6dp"
                               android:text="#"
-                              android:textSize="24sp"
-                              app:backgroundTint="#E8EAED"
-                              app:cornerRadius="32dp" />
+                              android:textColor="#8AB4F8"
+                              android:textSize="28sp"
+                              android:textStyle="bold"
+                              app:backgroundTint="#282C34"
+                              app:cornerRadius="34dp"
+                              app:strokeColor="#3A404D"
+                              app:strokeWidth="1dp" />
                       </GridLayout>
 
                       <com.google.android.material.button.MaterialButton
                           android:id="@+id/btnMakeCall"
-                          android:layout_width="160dp"
-                          android:layout_height="64dp"
+                          android:layout_width="180dp"
+                          android:layout_height="66dp"
                           android:layout_gravity="center_horizontal"
-                          android:layout_marginTop="12dp"
+                          android:layout_marginTop="14dp"
                           android:layout_marginBottom="8dp"
                           android:text="Ara"
                           android:textColor="#FFFFFF"
-                          android:textSize="18sp"
+                          android:textSize="20sp"
                           android:textStyle="bold"
-                          app:backgroundTint="#1E8E3E"
-                          app:cornerRadius="32dp"
+                          app:backgroundTint="#2EA043"
+                          app:cornerRadius="33dp"
                           app:icon="@android:drawable/sym_action_call"
                           app:iconGravity="textStart"
                           app:iconTint="#FFFFFF" />
@@ -1861,7 +2151,7 @@ jobs:
                   xmlns:app="http://schemas.android.com/apk/res-auto"
                   android:layout_width="match_parent"
                   android:layout_height="match_parent"
-                  android:background="#1A1C1E"
+                  android:background="#0F1115"
                   android:gravity="center_horizontal"
                   android:orientation="vertical"
                   android:padding="28dp">
@@ -1880,16 +2170,18 @@ jobs:
                       android:layout_width="104dp"
                       android:layout_height="104dp"
                       android:layout_marginTop="28dp"
-                      app:cardBackgroundColor="#2D3135"
+                      app:cardBackgroundColor="#1C1F26"
                       app:cardCornerRadius="52dp"
-                      app:cardElevation="0dp">
+                      app:cardElevation="0dp"
+                      app:strokeColor="#3A404D"
+                      app:strokeWidth="1dp">
 
                       <ImageView
                           android:layout_width="52dp"
                           android:layout_height="52dp"
                           android:layout_gravity="center"
                           android:src="@android:drawable/ic_menu_myplaces"
-                          app:tint="#E3E3E3" />
+                          app:tint="#FFFFFF" />
                   </com.google.android.material.card.MaterialCardView>
 
                   <TextView
@@ -1899,8 +2191,8 @@ jobs:
                       android:layout_marginTop="24dp"
                       android:gravity="center"
                       android:text="0555 000 00 00"
-                      android:textColor="#E3E3E3"
-                      android:textSize="32sp"
+                      android:textColor="#FFFFFF"
+                      android:textSize="34sp"
                       android:textStyle="bold" />
 
                   <TextView
@@ -1911,15 +2203,16 @@ jobs:
                       android:gravity="center"
                       android:text="Gelen arama..."
                       android:textColor="#9AA0A6"
-                      android:textSize="17sp" />
+                      android:textSize="18sp" />
 
                   <Chronometer
                       android:id="@+id/chronometerCallTimer"
                       android:layout_width="wrap_content"
                       android:layout_height="wrap_content"
-                      android:layout_marginTop="6dp"
+                      android:layout_marginTop="8dp"
                       android:textColor="#81C995"
-                      android:textSize="18sp"
+                      android:textSize="20sp"
+                      android:textStyle="bold"
                       android:visibility="gone" />
 
                   <Space
@@ -1939,24 +2232,32 @@ jobs:
                       <com.google.android.material.button.MaterialButton
                           android:id="@+id/btnMute"
                           style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="110dp"
+                          android:layout_width="116dp"
                           android:layout_height="72dp"
                           android:layout_marginEnd="16dp"
                           android:text="Sessiz"
-                          android:textColor="#E3E3E3"
-                          app:backgroundTint="#2D3135"
-                          app:cornerRadius="36dp" />
+                          android:textColor="#FFFFFF"
+                          android:textSize="16sp"
+                          android:textStyle="bold"
+                          app:backgroundTint="#282C34"
+                          app:cornerRadius="36dp"
+                          app:strokeColor="#3A404D"
+                          app:strokeWidth="1dp" />
 
                       <com.google.android.material.button.MaterialButton
                           android:id="@+id/btnSpeaker"
                           style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="110dp"
+                          android:layout_width="116dp"
                           android:layout_height="72dp"
                           android:layout_marginStart="16dp"
                           android:text="Hoparlör"
-                          android:textColor="#E3E3E3"
-                          app:backgroundTint="#2D3135"
-                          app:cornerRadius="36dp" />
+                          android:textColor="#FFFFFF"
+                          android:textSize="16sp"
+                          android:textStyle="bold"
+                          app:backgroundTint="#282C34"
+                          app:cornerRadius="36dp"
+                          app:strokeColor="#3A404D"
+                          app:strokeWidth="1dp" />
                   </LinearLayout>
 
                   <LinearLayout
@@ -1968,17 +2269,18 @@ jobs:
 
                       <com.google.android.material.button.MaterialButton
                           android:id="@+id/btnReject"
-                          android:layout_width="84dp"
-                          android:layout_height="84dp"
+                          android:layout_width="88dp"
+                          android:layout_height="88dp"
                           android:insetLeft="0dp"
                           android:insetTop="0dp"
                           android:insetRight="0dp"
                           android:insetBottom="0dp"
                           android:text="Kapat"
                           android:textColor="#FFFFFF"
-                          android:textSize="13sp"
-                          app:backgroundTint="#D93025"
-                          app:cornerRadius="42dp" />
+                          android:textSize="15sp"
+                          android:textStyle="bold"
+                          app:backgroundTint="#DA3633"
+                          app:cornerRadius="44dp" />
 
                       <Space
                           android:id="@+id/spaceBetweenCallButtons"
@@ -1987,17 +2289,18 @@ jobs:
 
                       <com.google.android.material.button.MaterialButton
                           android:id="@+id/btnAnswer"
-                          android:layout_width="84dp"
-                          android:layout_height="84dp"
+                          android:layout_width="88dp"
+                          android:layout_height="88dp"
                           android:insetLeft="0dp"
                           android:insetTop="0dp"
                           android:insetRight="0dp"
                           android:insetBottom="0dp"
                           android:text="Yanıtla"
                           android:textColor="#FFFFFF"
-                          android:textSize="13sp"
-                          app:backgroundTint="#1E8E3E"
-                          app:cornerRadius="42dp" />
+                          android:textSize="15sp"
+                          android:textStyle="bold"
+                          app:backgroundTint="#2EA043"
+                          app:cornerRadius="44dp" />
                   </LinearLayout>
 
               </LinearLayout>
@@ -2020,5 +2323,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v2.4.1-APK
+          name: RemotePhone-v2.6.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
