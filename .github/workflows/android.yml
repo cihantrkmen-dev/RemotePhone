@@ -73,8 +73,8 @@ jobs:
                       applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 16
-                      versionName = "3.0.0"
+                      versionCode = 18
+                      versionName = "3.2.0"
                   }
 
                   buildTypes {
@@ -121,6 +121,7 @@ jobs:
               <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
                   <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+                  <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
                   <uses-permission android:name="android.permission.CALL_PHONE" />
                   <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
                   <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
@@ -499,7 +500,6 @@ jobs:
               }
           """)
 
-          # SipAudioEngine.kt: Symmetric RTP NAT Punching + 3s Mobil Veri Keep-Alive + 180/200/ACK + Donanımsal AEC/AGC
           write_file("app/src/main/java/com/example/remotephone/SipAudioEngine.kt", r"""
               package com.example.remotephone
 
@@ -535,8 +535,21 @@ jobs:
                   private var isCallActive = false
                   @Volatile
                   private var isMicMuted = false
+
                   @Volatile
-                  private var lastOkResponse: String = ""
+                  private var activeCallId: String = ""
+                  @Volatile
+                  private var activeFromHeader: String = ""
+                  @Volatile
+                  private var activeToHeader: String = ""
+                  @Volatile
+                  private var activeServerIp: InetAddress? = null
+                  @Volatile
+                  private var activeServerPort: Int = 5060
+                  @Volatile
+                  private var activeDomain: String = ""
+                  @Volatile
+                  private var activeUser: String = ""
 
                   var onCallConnected: (() -> Unit)? = null
                   var onCallTerminated: (() -> Unit)? = null
@@ -586,6 +599,12 @@ jobs:
                               val cleanDomain = sipDomain.trim().substringBefore(":")
                               val serverIp = InetAddress.getByName(cleanDomain)
                               val serverPort = sipDomain.substringAfter(":", "5060").toIntOrNull() ?: 5060
+
+                              activeServerIp = serverIp
+                              activeServerPort = serverPort
+                              activeDomain = cleanDomain
+                              activeUser = sipUsername
+
                               val callId = UUID.randomUUID().toString()
                               var cseq = 1
                               var lastAuthHeader = ""
@@ -615,7 +634,6 @@ jobs:
                                       "Content-Length: 0" + CRLF + CRLF
                               }
 
-                              // Periyodik SIP Register (20 saniyede bir)
                               launch {
                                   while (isActive) {
                                       try { sendSip(buildRegister(lastAuthHeader)) } catch (_: Exception) {}
@@ -623,7 +641,6 @@ jobs:
                                   }
                               }
 
-                              // Mobil Veri + Hotspot CGNAT Tünelini Açık Tutan 3 Saniyelik Keep-Alive
                               launch {
                                   val keepAliveBytes = CRLF.toByteArray()
                                   while (isActive) {
@@ -640,7 +657,6 @@ jobs:
                                   socket.receive(packet)
                                   val text = String(packet.data, 0, packet.length)
 
-                                  // Sunucunun Via başlığından öğrendiği gerçek CGNAT IP ve Portu yakala
                                   val viaLine = text.lines().firstOrNull { it.startsWith("Via:", true) } ?: ""
                                   if (viaLine.contains("received=")) {
                                       discoveredPublicIp = viaLine.substringAfter("received=").substringBefore(";").substringBefore(" ").trim()
@@ -681,7 +697,10 @@ jobs:
                                       val recordRoutes = text.lines().filter { it.startsWith("Record-Route:", true) }.joinToString(CRLF)
                                       val rrSection = if (recordRoutes.isNotEmpty()) recordRoutes + CRLF else ""
 
-                                      // 1. Önce 180 Ringing gönder (Operatör ve SIP sunucusunun state makinesini hazırlar)
+                                      activeCallId = cid
+                                      activeFromHeader = from
+                                      activeToHeader = toWithTag
+
                                       val ringing = "SIP/2.0 180 Ringing" + CRLF +
                                           viaLines + CRLF +
                                           rrSection +
@@ -725,15 +744,12 @@ jobs:
                                           "Contact: <sip:$sipUsername@$sdpIp:$contactPort;transport=udp>" + CRLF +
                                           "Content-Type: application/sdp" + CRLF +
                                           "Content-Length: ${sdp.length}" + CRLF + CRLF + sdp
-                                      lastOkResponse = ok
                                       sendSip(ok)
 
                                       if (!isCallActive) {
                                           startRtpAudioStream(rtp, InetAddress.getByName(remoteRtpIp), remoteRtpPort)
                                           onCallConnected?.invoke()
                                       }
-                                  } else if (text.startsWith("ACK ")) {
-                                      // ACK alındı, bağlantı kesinleşti
                                   } else if (text.startsWith("BYE ") || text.startsWith("CANCEL ")) {
                                       val via = text.lines().firstOrNull { it.startsWith("Via:", true) } ?: ""
                                       val from = text.lines().firstOrNull { it.startsWith("From:", true) } ?: ""
@@ -754,7 +770,6 @@ jobs:
                       isCallActive = true
                       rtpJob?.cancel()
                       rtpJob = scope.launch {
-                          // Ses başlamadan önce S25 Ultra'yı İletişim Moduna kilitle
                           val am = appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
                           am?.mode = AudioManager.MODE_IN_COMMUNICATION
                           am?.isSpeakerphoneOn = false
@@ -772,7 +787,6 @@ jobs:
                               minBuf
                           )
 
-                          // Donanımsal Yankı Engelleyici (AEC), Gürültü Önleyici (NS) ve Otomatik Kazanç (AGC)
                           try {
                               val sessionId = recorder.audioSessionId
                               if (AcousticEchoCanceler.isAvailable()) {
@@ -806,17 +820,15 @@ jobs:
                           recorder.startRecording()
                           player.play()
 
-                          // 1. ADIM: Symmetric RTP NAT Punching (Hotspot + Mobil Veri CGNAT güvenlik duvarını delmek için 10 hızlı paket)
                           val punchBuf = ByteArray(172)
                           punchBuf[0] = 0x80.toByte()
                           punchBuf[1] = 8.toByte()
-                          for (i in 12 until 172) punchBuf[i] = 0xD5.toByte() // PCMA sessizlik byte'ı
+                          for (i in 12 until 172) punchBuf[i] = 0xD5.toByte()
                           for (p in 0 until 10) {
                               punchBuf[3] = p.toByte()
                               try { socket.send(DatagramPacket(punchBuf, punchBuf.size, remoteIp, remotePort)) } catch (_: Exception) {}
                           }
 
-                          // 2. ADIM: Mikrofon -> RTP Giden Ses Gönderimi (Susturulsa bile sessizlik paketi göndererek NAT'ı açık tutar!)
                           launch {
                               var seq = 10
                               var ts = 1600
@@ -843,7 +855,6 @@ jobs:
                               }
                           }
 
-                          // 3. ADIM: RTP -> Hoparlör/Ahize Gelen Ses Okuma (PCMA PT=8 ve PCMU PT=0 Çift Codec Destekli)
                           try {
                               val inBuf = ByteArray(512)
                               val outPcm = ShortArray(160)
@@ -927,6 +938,29 @@ jobs:
                       setSpeakerphone(false)
                       rtpJob?.cancel()
                       try { rtpSocket?.close() } catch (_: Exception) {}
+
+                      val socket = sipSocket
+                      val srvIp = activeServerIp
+                      if (socket != null && !socket.isClosed && srvIp != null && activeCallId.isNotEmpty()) {
+                          scope.launch {
+                              try {
+                                  val localIp = getLocalIpAddress()
+                                  val branch = "z9hG4bK" + UUID.randomUUID().toString().replace("-", "").take(12)
+                                  val fromHdr = activeToHeader.replaceFirst("To:", "From:", true)
+                                  val toHdr = activeFromHeader.replaceFirst("From:", "To:", true)
+                                  val byeMsg = "BYE sip:$activeDomain SIP/2.0" + CRLF +
+                                      "Via: SIP/2.0/UDP $localIp:${socket.localPort};rport;branch=$branch" + CRLF +
+                                      "Max-Forwards: 70" + CRLF +
+                                      fromHdr + CRLF +
+                                      toHdr + CRLF +
+                                      activeCallId + CRLF +
+                                      "CSeq: 99 BYE" + CRLF +
+                                      "Content-Length: 0" + CRLF + CRLF
+                                  val bytes = byeMsg.toByteArray()
+                                  socket.send(DatagramPacket(bytes, bytes.size, srvIp, activeServerPort))
+                              } catch (_: Exception) {}
+                          }
+                      }
                   }
 
                   fun sendDtmf(digit: Char) {}
@@ -986,7 +1020,7 @@ jobs:
                       val mode = intent?.getStringExtra("MODE") ?: prefs.getString("saved_mode", "NONE") ?: "NONE"
 
                       val roleText = when (mode) {
-                          "HOST" -> "1. Telefon (Note 10 Lite Sessiz Konferans Köprüsü) Aktif"
+                          "HOST" -> "1. Telefon (Note 10 Lite Saf Konferans Köprüsü) Aktif"
                           "CLIENT" -> "2. Telefon (S25 Ultra Uzak Ahize) Aktif"
                           else -> "Servis Hazır"
                       }
@@ -1046,20 +1080,24 @@ jobs:
                                   showIncomingCallNotification(data, isLocalHostFallback = false)
                               }
                           }
-                          "ENDED" -> {
+                          "ENDED", "HOST_HANGUP_DONE" -> {
                               val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                               nm.cancel(CALL_NOTIFICATION_ID)
                           }
+                          "HANGUP_FIRST", "REJECT" -> {
+                              if (mode == "HOST" && HostInCallService.instance == null) {
+                                  HotspotLanBridge.send("HOST_HANGUP_DONE")
+                                  HotspotLanBridge.send("ENDED")
+                              }
+                          }
                           "DIAL" -> {
-                              // Note 10 Lite'ta henüz aktif çağrı yoksa HostInCallService uykudadır;
-                              // İlk aramayı doğrudan bu servisten başlatarak HostInCallService'i uyandırıyoruz:
                               if (mode == "HOST" && HostInCallService.instance == null) {
                                   val sipNo = prefs.getString("sip_number", "") ?: ""
                                   if (data.isNotEmpty() && sipNo.isNotEmpty()) {
                                       HostInCallService.sipBridgeDidNumber = sipNo
                                       HostInCallService.prepareOutgoingSipFirstState(data)
                                       HotspotLanBridge.send("BRIDGE_RINGING_SIP")
-                                      HostInCallService.placeQuietSystemCall(this, sipNo)
+                                      HostInCallService.placeSystemCallWithSim(this, sipNo, null)
                                   }
                               }
                           }
@@ -1167,21 +1205,23 @@ jobs:
               }
           """)
 
-          # HostInCallService.kt: Ekransız Sessiz Köprü + STATE_HOLDING Tetiği + Sıralı 1./2. Bacak İndeksleme + Konferans Döngüsü
+          # HostInCallService.kt: Çağrı yönlendirme tamamen kaldırıldı!
+          # Gelen ve Giden aramalarda %100 Saf Konferans Köprüsü + Ekran Uyanma Kilidi (2. aramanın başlamasını garantiler)
           write_file("app/src/main/java/com/example/remotephone/HostInCallService.kt", r"""
               package com.example.remotephone
 
               import android.annotation.SuppressLint
               import android.content.Context
               import android.content.Intent
-              import android.media.AudioManager
               import android.net.Uri
               import android.os.Bundle
               import android.os.Handler
               import android.os.Looper
+              import android.os.PowerManager
               import android.telecom.Call
               import android.telecom.CallAudioState
               import android.telecom.InCallService
+              import android.telecom.PhoneAccountHandle
               import android.telecom.TelecomManager
               import android.telecom.VideoProfile
 
@@ -1207,29 +1247,66 @@ jobs:
                           secondLegDialed = false
                       }
 
-                      // Note 10 Lite'ta ekran açmadan arka planda çağrı başlatan resmi TelecomManager metodu
+                      // Note 10 Lite'ın işlemcisini ve Telecom servisini uyandırarak 2. çağrıyı kesin olarak başlatır
                       @SuppressLint("MissingPermission")
-                      fun placeQuietSystemCall(context: Context, rawNumber: String) {
+                      fun placeSystemCallWithSim(
+                          context: Context,
+                          rawNumber: String,
+                          preferredAccount: PhoneAccountHandle?
+                      ) {
                           val clean = rawNumber.trim()
                           if (clean.isEmpty()) return
-                          val uri = Uri.parse("tel:" + Uri.encode(clean))
+
+                          // Cihaz derin uykuda/kilitliyken Samsung Telecom'un 2. aramayı bloke etmesini önlemek için kısa WakeLock
                           try {
-                              val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                              tm.placeCall(uri, Bundle())
+                              val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                              @Suppress("DEPRECATION")
+                              val wl = pm.newWakeLock(
+                                  PowerManager.SCREEN_DIM_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                                  "RemotePhone::SecondLegDialWake"
+                              )
+                              wl.acquire(5_000L)
+                          } catch (_: Exception) {}
+
+                          val uri = Uri.parse("tel:" + Uri.encode(clean))
+                          val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+
+                          val extras = Bundle()
+                          val accountToUse = preferredAccount ?: try {
+                              tm.getDefaultOutgoingPhoneAccount("tel")
+                                  ?: tm.callCapablePhoneAccounts.firstOrNull()
+                          } catch (_: Exception) { null }
+
+                          if (accountToUse != null) {
+                              extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, accountToUse)
+                          }
+
+                          try {
+                              tm.placeCall(uri, extras)
                           } catch (_: Exception) {
                               try {
                                   val callIntent = Intent(Intent.ACTION_CALL, uri).apply {
                                       flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                      if (accountToUse != null) {
+                                          putExtra(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, accountToUse)
+                                      }
                                   }
                                   context.startActivity(callIntent)
                               } catch (_: Exception) {}
                           }
+                      }
+
+                      // Operatördeki tüm çağrı yönlendirmelerini (##002#) tamamen devre dışı bırakır
+                      @SuppressLint("MissingPermission")
+                      fun disableAllCallForwarding(context: Context) {
+                          placeSystemCallWithSim(context, "##002#", null)
                       }
                   }
 
                   private val handler = Handler(Looper.getMainLooper())
                   private var firstLegCall: Call? = null
                   private var secondLegCall: Call? = null
+                  private var activeSimAccount: PhoneAccountHandle? = null
 
                   override fun onCreate() {
                       super.onCreate()
@@ -1248,7 +1325,6 @@ jobs:
                       super.onDestroy()
                   }
 
-                  // Note 10 Lite'ın kendi mikrofonunu kapatır ve sesi en kısık iç ahizeye kilitler (ortama ses sızdırmaz)
                   private fun enforceSilentHostAudio() {
                       try {
                           setMuted(true)
@@ -1260,9 +1336,9 @@ jobs:
                   override fun onEvent(event: String, data: String) {
                       when (event) {
                           "ANSWER" -> {
-                              // GELEN ARAMA: S25 Ultra'dan Yanıtla basıldı ->
-                              // Note 10 Lite ekran açmadan gelen çağrıyı açar, STATE_HOLDING olunca SIP numarasını arar
-                              val ringingCall = calls.firstOrNull { it.state == Call.STATE_RINGING }
+                              // S25 Ultra'dan Yanıtla basıldı:
+                              // Çağrı yönlendirme KULLANILMAZ! Doğrudan gelen çağrı açılır, beklemeye alınır ve SIP numarası aranıp konferans yapılır.
+                              val ringingCall = calls.firstOrNull { it.state == Call.STATE_RINGING } ?: firstLegCall
                               if (ringingCall != null && sipBridgeDidNumber.isNotEmpty()) {
                                   isIncomingConferenceMode = true
                                   isOutgoingSipFirstMode = false
@@ -1270,22 +1346,22 @@ jobs:
                                   pendingSecondLegNumber = sipBridgeDidNumber
                                   firstLegCall = ringingCall
                                   secondLegCall = null
+                                  activeSimAccount = ringingCall.details?.accountHandle
                                   enforceSilentHostAudio()
                                   ringingCall.answer(VideoProfile.STATE_AUDIO_ONLY)
                               }
                           }
-                          "REJECT" -> {
-                              hangupAllCalls()
+                          "HANGUP_FIRST", "REJECT" -> {
+                              // Önce Note 10 Lite'ta tüm konferans ve çağrıları sonlandır, sonra S25 Ultra'ya bildir!
+                              hangupAllCallsOnHostFirst()
                           }
                           "DIAL" -> {
-                              // GİDEN ARAMA: S25 Ultra'dan Ara basıldı ->
-                              // Note 10 Lite önce S25 Ultra SIP numarasını arar, STATE_HOLDING olunca dış numarayı arar
                               if (data.isNotEmpty() && sipBridgeDidNumber.isNotEmpty()) {
                                   prepareOutgoingSipFirstState(data)
                                   firstLegCall = null
                                   secondLegCall = null
                                   HotspotLanBridge.send("BRIDGE_RINGING_SIP")
-                                  placeQuietSystemCall(this, sipBridgeDidNumber)
+                                  placeSystemCallWithSim(this, sipBridgeDidNumber, activeSimAccount)
                               }
                           }
                       }
@@ -1294,7 +1370,10 @@ jobs:
                   override fun onCallAdded(call: Call) {
                       super.onCallAdded(call)
 
-                      // Konferans çatı çağrısı oluştuğunda sessizliği koru ve S25 Ultra'ya bildir
+                      if (call.details?.accountHandle != null) {
+                          activeSimAccount = call.details.accountHandle
+                      }
+
                       if (call.details.hasProperty(Call.Details.PROPERTY_CONFERENCE)) {
                           enforceSilentHostAudio()
                           HotspotLanBridge.send("BRIDGE_CONNECTED")
@@ -1303,7 +1382,6 @@ jobs:
 
                       val number = call.details?.handle?.schemeSpecificPart ?: "Bilinmeyen Numara"
 
-                      // Çağrıları numara tahminine göre değil, kesin oluşturulma sırasına (1. Bacak ve 2. Bacak) göre ata
                       if (isOutgoingSipFirstMode || isIncomingConferenceMode) {
                           if (firstLegCall == null) {
                               firstLegCall = call
@@ -1311,7 +1389,6 @@ jobs:
                               secondLegCall = call
                           }
                       } else if (call.state == Call.STATE_RINGING) {
-                          // Yeni gelen dış GSM araması: Note 10 Lite'ın zilini sustur ve S25 Ultra'yı uyandır!
                           firstLegCall = call
                           try {
                               val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
@@ -1322,10 +1399,8 @@ jobs:
                           val callerPayload = "$number~$hostContactName"
 
                           if (HotspotLanBridge.isConnected) {
-                              // S25 Ultra bağlıysa Note 10 Lite'ta HİÇBİR EKRAN AÇMA, doğrudan S25 Ultra'ya gönder
                               HotspotLanBridge.send("INCOMING", callerPayload)
                           } else {
-                              // Sadece S25 Ultra bağlı değilse güvenlik amacıyla Note 10 Lite ekranında aç
                               val intent = Intent(this, RemoteCallActivity::class.java).apply {
                                   flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                                   putExtra("CALLER_NUMBER", callerPayload)
@@ -1350,35 +1425,38 @@ jobs:
 
                       when (state) {
                           Call.STATE_DIALING, Call.STATE_RINGING -> {
-                              if (call == secondLegCall && isOutgoingSipFirstMode) {
-                                  HotspotLanBridge.send("OUTGOING_DIALING_EXTERNAL")
+                              if (call == secondLegCall) {
+                                  if (isOutgoingSipFirstMode) {
+                                      HotspotLanBridge.send("OUTGOING_DIALING_EXTERNAL")
+                                  } else {
+                                      HotspotLanBridge.send("BRIDGE_RINGING_SIP")
+                                  }
                               }
                           }
                           Call.STATE_ACTIVE -> {
                               enforceSilentHostAudio()
                               if (call == firstLegCall && !secondLegDialed) {
-                                  // 1. Bacak açıldı! Şimdi 2. aramayı yapabilmek için 1. bacağı BEKLEMEYE (HOLD) al:
-                                  requestHoldAndDialSecondLeg(call, 0)
+                                  val initialDelay = if (isIncomingConferenceMode) 1000L else 400L
+                                  handler.postDelayed({
+                                      requestHoldAndDialSecondLeg(call, 0)
+                                  }, initialDelay)
                               } else if (call == secondLegCall && secondLegDialed) {
-                                  // 2. Bacak da açıldı! İki çağrıyı konferansta birleştir:
                                   scheduleConferenceMerge(0)
                               }
                           }
                           Call.STATE_HOLDING -> {
-                              // 1. Bacak resmen BEKLEMEYE (STATE_HOLDING) geçtiği milisaniyede 2. aramayı başlat!
                               if (call == firstLegCall && !secondLegDialed && pendingSecondLegNumber.isNotEmpty()) {
                                   dialSecondLegNow()
                               }
                           }
                           Call.STATE_DISCONNECTED -> {
                               if (calls.none { it.state != Call.STATE_DISCONNECTED }) {
-                                  hangupAllCalls()
+                                  resetBridgeStateAndNotifyEnd()
                               }
                           }
                       }
                   }
 
-                  // 1. Bacak STATE_HOLDING olana kadar hold() komutunu tekrarlar; 1.8 saniye içinde geçmezse yine de 2. aramayı tetikler
                   private fun requestHoldAndDialSecondLeg(call: Call, attempt: Int) {
                       if (secondLegDialed) return
                       try { call.hold() } catch (_: Exception) {}
@@ -1408,11 +1486,25 @@ jobs:
                       }
 
                       handler.postDelayed({
-                          placeQuietSystemCall(this@HostInCallService, numberToDial)
+                          placeSystemCallWithSim(this@HostInCallService, numberToDial, activeSimAccount)
+                          // Eğer 1.5 saniye içinde 2. çağrı listeye eklenmediyse yedek olarak ACTION_CALL ile tekrar tetikle
+                          handler.postDelayed({
+                              if (calls.size < 2 && (isIncomingConferenceMode || isOutgoingSipFirstMode)) {
+                                  try {
+                                      val uri = Uri.parse("tel:" + Uri.encode(numberToDial.trim()))
+                                      val callIntent = Intent(Intent.ACTION_CALL, uri).apply {
+                                          flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                          if (activeSimAccount != null) {
+                                              putExtra(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, activeSimAccount)
+                                          }
+                                      }
+                                      startActivity(callIntent)
+                                  } catch (_: Exception) {}
+                              }
+                          }, 1500L)
                       }, 350L)
                   }
 
-                  // Operatör konferansı onaylayana kadar 750ms arayla 8 kez birleştirmeyi zorlayan döngü
                   private fun scheduleConferenceMerge(attempt: Int) {
                       if (attempt > 8) return
                       handler.postDelayed({
@@ -1438,7 +1530,7 @@ jobs:
                           if (calls.none { it.details.hasProperty(Call.Details.PROPERTY_CONFERENCE) }) {
                               scheduleConferenceMerge(attempt + 1)
                           }
-                      }, if (attempt == 0) 350L else 750L)
+                      }, if (attempt == 0) 400L else 750L)
                   }
 
                   fun answerLocalCall() {
@@ -1454,20 +1546,47 @@ jobs:
                       setMuted(muted)
                   }
 
-                  fun hangupAllCalls() {
+                  fun hangupAllCallsOnHostFirst() {
                       isIncomingConferenceMode = false
                       isOutgoingSipFirstMode = false
                       secondLegDialed = false
                       pendingSecondLegNumber = ""
                       handler.removeCallbacksAndMessages(null)
                       setMuted(false)
-                      calls.forEach {
+
+                      val currentCalls = calls.toList()
+                      for (c in currentCalls) {
                           try {
-                              if (it.state == Call.STATE_RINGING) it.reject(false, null) else it.disconnect()
+                              c.children?.forEach { child ->
+                                  try { child.disconnect() } catch (_: Exception) {}
+                              }
+                              if (c.state == Call.STATE_RINGING) {
+                                  c.reject(false, null)
+                              } else {
+                                  c.disconnect()
+                              }
                           } catch (_: Exception) {}
                       }
+
                       firstLegCall = null
                       secondLegCall = null
+
+                      handler.postDelayed({
+                          HotspotLanBridge.send("HOST_HANGUP_DONE")
+                          HotspotLanBridge.send("ENDED")
+                      }, 350L)
+                  }
+
+                  private fun resetBridgeStateAndNotifyEnd() {
+                      isIncomingConferenceMode = false
+                      isOutgoingSipFirstMode = false
+                      secondLegDialed = false
+                      pendingSecondLegNumber = ""
+                      handler.removeCallbacksAndMessages(null)
+                      setMuted(false)
+                      firstLegCall = null
+                      secondLegCall = null
+                      HotspotLanBridge.send("HOST_HANGUP_DONE")
                       HotspotLanBridge.send("ENDED")
                   }
               }
@@ -1482,6 +1601,8 @@ jobs:
               import android.media.Ringtone
               import android.media.RingtoneManager
               import android.os.Bundle
+              import android.os.Handler
+              import android.os.Looper
               import android.os.PowerManager
               import android.os.SystemClock
               import android.view.View
@@ -1496,10 +1617,12 @@ jobs:
 
                   private var ringtone: Ringtone? = null
                   private var proximityWakeLock: PowerManager.WakeLock? = null
+                  private val handler = Handler(Looper.getMainLooper())
                   private var isMuted = false
                   private var isSpeakerOn = false
                   private var isLocalFallback = false
                   private var isOutgoingCall = false
+                  private var isClosingInProgress = false
                   private var rawPhoneNumber: String = ""
                   private var resolvedContactName: String? = null
 
@@ -1508,6 +1631,7 @@ jobs:
                   private lateinit var chronometer: Chronometer
                   private lateinit var layoutInCallControls: LinearLayout
                   private lateinit var btnAnswer: MaterialButton
+                  private lateinit var btnReject: MaterialButton
                   private lateinit var spaceBetween: Space
 
                   override fun onCreate(savedInstanceState: Bundle?) {
@@ -1527,7 +1651,7 @@ jobs:
                       chronometer = findViewById(R.id.chronometerCallTimer)
                       layoutInCallControls = findViewById(R.id.layoutInCallControls)
                       btnAnswer = findViewById(R.id.btnAnswer)
-                      val btnReject = findViewById<MaterialButton>(R.id.btnReject)
+                      btnReject = findViewById(R.id.btnReject)
                       spaceBetween = findViewById(R.id.spaceBetweenCallButtons)
                       val btnMute = findViewById<MaterialButton>(R.id.btnMute)
                       val btnSpeaker = findViewById<MaterialButton>(R.id.btnSpeaker)
@@ -1563,7 +1687,11 @@ jobs:
                       }
 
                       SipAudioEngine.onCallTerminated = {
-                          runOnUiThread { cleanupAndFinish() }
+                          runOnUiThread {
+                              if (!isClosingInProgress) {
+                                  cleanupAndFinish()
+                              }
+                          }
                       }
 
                       btnMute.setOnClickListener {
@@ -1595,21 +1723,37 @@ jobs:
                               HostInCallService.instance?.answerLocalCall()
                               switchToActiveCallUi()
                           } else {
-                              updateStatusText("Konferans Köprüsü Kuruluyor...")
+                              updateStatusText("Note 10 Lite Açılıyor & Konferans Kuruluyor...")
                               SipAudioEngine.prepareForIncomingAudio()
                               HotspotLanBridge.send("ANSWER")
                           }
                       }
 
                       btnReject.setOnClickListener {
+                          ringtone?.stop()
+                          btnReject.isEnabled = false
+                          btnAnswer.isEnabled = false
+
                           if (isLocalFallback) {
-                              HostInCallService.instance?.hangupAllCalls()
+                              HostInCallService.instance?.hangupAllCallsOnHostFirst()
+                              cleanupAndFinish()
                           } else {
-                              SipAudioEngine.terminateAudioCall()
-                              HotspotLanBridge.send("REJECT")
+                              isClosingInProgress = true
+                              updateStatusText("Önce Note 10 Lite Sonlandırılıyor...")
+                              HotspotLanBridge.send("HANGUP_FIRST")
+
+                              handler.postDelayed({
+                                  finishS25UltraCall()
+                              }, 900L)
                           }
-                          cleanupAndFinish()
                       }
+                  }
+
+                  private fun finishS25UltraCall() {
+                      if (isFinishing) return
+                      handler.removeCallbacksAndMessages(null)
+                      SipAudioEngine.terminateAudioCall()
+                      cleanupAndFinish()
                   }
 
                   private fun updateStatusText(status: String) {
@@ -1622,10 +1766,17 @@ jobs:
 
                   override fun onEvent(event: String, data: String) {
                       when (event) {
-                          "BRIDGE_RINGING_SIP" -> updateStatusText("S25 Ultra SIP Hattı Aranıyor...")
+                          "BRIDGE_RINGING_SIP" -> updateStatusText("Note 10 Lite -> S25 Ultra Konferansa Ekleniyor...")
                           "OUTGOING_DIALING_EXTERNAL" -> updateStatusText("Dış Numara Çalıyor...")
                           "BRIDGE_CONNECTED" -> switchToActiveCallUi()
-                          "ENDED" -> cleanupAndFinish()
+                          "HOST_HANGUP_DONE" -> {
+                              finishS25UltraCall()
+                          }
+                          "ENDED" -> {
+                              if (!isClosingInProgress) {
+                                  finishS25UltraCall()
+                              }
+                          }
                       }
                   }
 
@@ -1660,6 +1811,7 @@ jobs:
                   }
 
                   override fun onDestroy() {
+                      handler.removeCallbacksAndMessages(null)
                       HotspotLanBridge.removeListener(this)
                       ringtone?.stop()
                       try {
@@ -1795,7 +1947,12 @@ jobs:
                           requestDefaultDialerRole()
                           startKeepAliveService("HOST")
                           cardSetupPanel.visibility = View.GONE
-                          tvConnectionStatus.text = "● Note 10 Lite (Sessiz Konferans Köprüsü) Aktif"
+                          tvConnectionStatus.text = "● Note 10 Lite (Saf Konferans Köprüsü) Aktif"
+                      }
+
+                      findViewById<Button>(R.id.btnDisableForwarding).setOnClickListener {
+                          HostInCallService.disableAllCallForwarding(this)
+                          Toast.makeText(this, "Tüm çağrı yönlendirmeleri iptal ediliyor (##002#)", Toast.LENGTH_SHORT).show()
                       }
 
                       findViewById<Button>(R.id.btnStartClient).setOnClickListener {
@@ -1825,7 +1982,7 @@ jobs:
 
                           val currentMode = prefs.getString("saved_mode", "CLIENT")
                           if (currentMode == "HOST" && !HotspotLanBridge.isConnected) {
-                              HostInCallService.placeQuietSystemCall(this, targetNumber)
+                              HostInCallService.placeSystemCallWithSim(this, targetNumber, null)
                               val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
                                   putExtra("CALLER_NUMBER", targetNumber)
                                   putExtra("IS_OUTGOING", true)
@@ -2045,6 +2202,7 @@ jobs:
                   private fun requestRuntimePermissions() {
                       val permissions = mutableListOf(
                           Manifest.permission.READ_PHONE_STATE,
+                          Manifest.permission.READ_PHONE_NUMBERS,
                           Manifest.permission.CALL_PHONE,
                           Manifest.permission.ANSWER_PHONE_CALLS,
                           Manifest.permission.RECORD_AUDIO,
@@ -2135,7 +2293,7 @@ jobs:
                               <TextView
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
-                                  android:text="Konferans Köprüsü &amp; SIP Ayarları"
+                                  android:text="Saf Konferans Köprüsü (Yönlendirmesiz)"
                                   android:textColor="#8AB4F8"
                                   android:textSize="14sp"
                                   android:textStyle="bold" />
@@ -2151,13 +2309,31 @@ jobs:
                                   android:textColorHint="#9AA0A6"
                                   android:textSize="14sp" />
 
-                              <com.google.android.material.button.MaterialButton
-                                  android:id="@+id/btnStartHost"
+                              <LinearLayout
                                   android:layout_width="match_parent"
-                                  android:layout_height="44dp"
-                                  android:text="1. Telefon (Note 10 Lite) Başlat"
-                                  android:textColor="#FFFFFF"
-                                  app:backgroundTint="#1A73E8" />
+                                  android:layout_height="wrap_content"
+                                  android:orientation="horizontal">
+
+                                  <com.google.android.material.button.MaterialButton
+                                      android:id="@+id/btnStartHost"
+                                      android:layout_width="0dp"
+                                      android:layout_height="44dp"
+                                      android:layout_weight="1"
+                                      android:text="1. Telefon Başlat"
+                                      android:textColor="#FFFFFF"
+                                      android:textSize="12sp"
+                                      app:backgroundTint="#1A73E8" />
+
+                                  <com.google.android.material.button.MaterialButton
+                                      android:id="@+id/btnDisableForwarding"
+                                      android:layout_width="wrap_content"
+                                      android:layout_height="44dp"
+                                      android:layout_marginStart="6dp"
+                                      android:text="Yönlendirmeyi İptal Et (##002#)"
+                                      android:textColor="#FFFFFF"
+                                      android:textSize="11sp"
+                                      app:backgroundTint="#DA3633" />
+                              </LinearLayout>
 
                               <View
                                   android:layout_width="match_parent"
@@ -2667,5 +2843,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v3.0.0-APK
+          name: RemotePhone-v3.2.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
