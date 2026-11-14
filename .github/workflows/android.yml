@@ -73,8 +73,8 @@ jobs:
                       applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 12
-                      versionName = "2.6.1"
+                      versionCode = 14
+                      versionName = "2.8.0"
                   }
 
                   buildTypes {
@@ -98,6 +98,22 @@ jobs:
                   implementation("com.google.android.material:material:1.12.0")
                   implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
               }
+          """)
+
+          write_file("app/src/main/res/drawable/ic_launcher.xml", r"""
+              <?xml version="1.0" encoding="utf-8"?>
+              <vector xmlns:android="http://schemas.android.com/apk/res/android"
+                  android:width="108dp"
+                  android:height="108dp"
+                  android:viewportWidth="108"
+                  android:viewportHeight="108">
+                  <path
+                      android:fillColor="#1A73E8"
+                      android:pathData="M54,54m-50,0a50,50 0,1 1,100 0a50,50 0,1 1,-100 0" />
+                  <path
+                      android:fillColor="#FFFFFF"
+                      android:pathData="M73.5,62.8c-3.8,0 -7.5,-0.6 -10.9,-1.7c-1.1,-0.4 -2.4,-0.1 -3.2,0.7l-6.8,6.8c-8.7,-4.4 -15.8,-11.5 -20.2,-20.2l6.8,-6.8c0.9,-0.8 1.1,-2.1 0.7,-3.2c-1.1,-3.4 -1.7,-7.1 -1.7,-10.9c0,-1.7 -1.4,-3.1 -3.1,-3.1H24.5c-1.7,0 -3.1,1.4 -3.1,3.1c0,28.8 23.3,52.1 52.1,52.1c1.7,0 3.1,-1.4 3.1,-3.1V65.9C76.6,64.2 75.2,62.8 73.5,62.8z" />
+              </vector>
           """)
 
           write_file("app/src/main/AndroidManifest.xml", r"""
@@ -126,6 +142,8 @@ jobs:
 
                   <application
                       android:allowBackup="true"
+                      android:icon="@drawable/ic_launcher"
+                      android:roundIcon="@drawable/ic_launcher"
                       android:label="Telefon"
                       android:supportsRtl="true"
                       android:theme="@style/Theme.Material3.Dark.NoActionBar">
@@ -804,7 +822,7 @@ jobs:
                       val mode = intent?.getStringExtra("MODE") ?: prefs.getString("saved_mode", "NONE") ?: "NONE"
 
                       val roleText = when (mode) {
-                          "HOST" -> "1. Telefon (Note 10 Lite Ana Hat) Aktif"
+                          "HOST" -> "1. Telefon (Note 10 Lite Konferans Köprüsü) Aktif"
                           "CLIENT" -> "2. Telefon (S25 Ultra Uzak Ahize) Aktif"
                           else -> "Servis Hazır"
                       }
@@ -812,7 +830,7 @@ jobs:
                       val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
                           .setContentTitle("Telefon Köprüsü")
                           .setContentText(roleText)
-                          .setSmallIcon(android.R.drawable.sym_action_call)
+                          .setSmallIcon(R.drawable.ic_launcher)
                           .setOngoing(true)
                           .setPriority(NotificationCompat.PRIORITY_LOW)
                           .build()
@@ -890,7 +908,7 @@ jobs:
                       )
 
                       val notification = NotificationCompat.Builder(this, CALL_CHANNEL_ID)
-                          .setSmallIcon(android.R.drawable.sym_call_incoming)
+                          .setSmallIcon(R.drawable.ic_launcher)
                           .setContentTitle(displayTitle)
                           .setContentText(displaySubText)
                           .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -964,6 +982,7 @@ jobs:
               }
           """)
 
+          # HostInCallService.kt: GİDEN ARAMADA ÖNCE S25 ULTRA SIP, ARDINDAN DIŞ NUMARA KONFERANS KÖPRÜSÜ
           write_file("app/src/main/java/com/example/remotephone/HostInCallService.kt", r"""
               package com.example.remotephone
 
@@ -985,8 +1004,11 @@ jobs:
                       var sipBridgeDidNumber: String = ""
                   }
 
-                  private var isOutgoingBridgeMode = false
-                  private var targetExternalCall: Call? = null
+                  private var isIncomingConferenceMode = false
+                  private var isOutgoingSipFirstMode = false
+                  private var pendingExternalTargetNumber: String = ""
+
+                  private var externalGsmCall: Call? = null
                   private var sipBridgeCall: Call? = null
 
                   override fun onCreate() {
@@ -1009,50 +1031,64 @@ jobs:
                   override fun onEvent(event: String, data: String) {
                       when (event) {
                           "ANSWER" -> {
-                              calls.firstOrNull { it.state == Call.STATE_RINGING }?.reject(false, null)
-                          }
-                          "REJECT" -> {
-                              if (isOutgoingBridgeMode) {
-                                  hangupAllCalls()
-                              } else {
-                                  try {
-                                      val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                                      tm.silenceRinger()
-                                  } catch (_: Exception) {}
+                              // GELEN ARAMA: 1. Telefonda gelen çağrıyı aç, ardından SIP numarasını arayıp konferans yap
+                              val ringingCall = calls.firstOrNull { it.state == Call.STATE_RINGING }
+                              if (ringingCall != null && sipBridgeDidNumber.isNotEmpty()) {
+                                  isIncomingConferenceMode = true
+                                  isOutgoingSipFirstMode = false
+                                  externalGsmCall = ringingCall
+                                  sipBridgeCall = null
+                                  setMuted(true)
+                                  ringingCall.answer(VideoProfile.STATE_AUDIO_ONLY)
                               }
                           }
+                          "REJECT" -> {
+                              hangupAllCalls()
+                          }
                           "DIAL" -> {
+                              // GİDEN ARAMA: İlk önce S25 Ultra SIP numarasını ara, açılınca dış numarayı ara
                               if (data.isNotEmpty() && sipBridgeDidNumber.isNotEmpty()) {
-                                  startOutgoingConferenceBridge(data)
+                                  startOutgoingSipFirstBridge(data)
                               }
                           }
                       }
                   }
 
                   @SuppressLint("MissingPermission")
-                  private fun startOutgoingConferenceBridge(targetNumber: String) {
-                      isOutgoingBridgeMode = true
-                      targetExternalCall = null
+                  private fun startOutgoingSipFirstBridge(targetNumber: String) {
+                      isOutgoingSipFirstMode = true
+                      isIncomingConferenceMode = false
+                      pendingExternalTargetNumber = targetNumber
+                      externalGsmCall = null
                       sipBridgeCall = null
 
-                      val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                      tm.placeCall(Uri.parse("tel:" + Uri.encode(targetNumber)), Bundle())
+                      HotspotLanBridge.send("BRIDGE_RINGING_SIP")
+                      // 1. Adım: İlk olarak S25 Ultra SIP numarasını ara
+                      dialNumber(sipBridgeDidNumber)
                   }
 
                   @SuppressLint("MissingPermission")
-                  private fun dialSipBridgeNumber() {
+                  private fun dialNumber(numberToDial: String) {
                       val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                      tm.placeCall(Uri.parse("tel:" + Uri.encode(sipBridgeDidNumber)), Bundle())
+                      tm.placeCall(Uri.parse("tel:" + Uri.encode(numberToDial)), Bundle())
                   }
 
                   override fun onCallAdded(call: Call) {
                       super.onCallAdded(call)
                       val number = call.details?.handle?.schemeSpecificPart ?: "Bilinmeyen Numara"
 
-                      if (isOutgoingBridgeMode) {
-                          if (targetExternalCall == null) {
-                              targetExternalCall = call
-                          } else if (sipBridgeCall == null) {
+                      if (isOutgoingSipFirstMode) {
+                          // Giden aramada 1. çağrı SIP köprüsüdür, 2. çağrı dış hedef numaradır
+                          if (sipBridgeCall == null) {
+                              sipBridgeCall = call
+                          } else if (call != sipBridgeCall && externalGsmCall == null) {
+                              externalGsmCall = call
+                          }
+                      } else if (isIncomingConferenceMode) {
+                          // Gelen aramada 1. çağrı dış aramadır, 2. çağrı SIP köprüsüdür
+                          if (externalGsmCall == null) {
+                              externalGsmCall = call
+                          } else if (call != externalGsmCall && sipBridgeCall == null) {
                               sipBridgeCall = call
                           }
                       }
@@ -1060,23 +1096,44 @@ jobs:
                       call.registerCallback(object : Call.Callback() {
                           override fun onStateChanged(call: Call, state: Int) {
                               when (state) {
+                                  Call.STATE_DIALING, Call.STATE_RINGING -> {
+                                      // Giden aramada dış numara çalmaya başladığı an konferansı birleştirme denemesi (çalma sesini duymak için)
+                                      if (isOutgoingSipFirstMode && call == externalGsmCall) {
+                                          HotspotLanBridge.send("OUTGOING_DIALING_EXTERNAL")
+                                          tryMergeCalls()
+                                      }
+                                  }
                                   Call.STATE_ACTIVE -> {
-                                      if (isOutgoingBridgeMode) {
-                                          if (call == targetExternalCall && sipBridgeCall == null) {
-                                              HotspotLanBridge.send("OUTGOING_RINGING_SIP")
-                                              dialSipBridgeNumber()
-                                          } else if (call == sipBridgeCall && targetExternalCall != null) {
-                                              val bridge = sipBridgeCall
-                                              if (bridge != null) {
-                                                  targetExternalCall?.conference(bridge)
-                                              }
+                                      if (isOutgoingSipFirstMode) {
+                                          if (call == sipBridgeCall && externalGsmCall == null && pendingExternalTargetNumber.isNotEmpty()) {
+                                              // 1. Adım Tamam: S25 Ultra SIP hattı açıldı! Şimdi dış hedef numarayı ara:
+                                              val target = pendingExternalTargetNumber
+                                              pendingExternalTargetNumber = ""
                                               setMuted(true)
-                                              HotspotLanBridge.send("OUTGOING_CONNECTED")
+                                              HotspotLanBridge.send("OUTGOING_DIALING_EXTERNAL")
+                                              dialNumber(target)
+                                          } else if (call == externalGsmCall && sipBridgeCall != null) {
+                                              // 2. Adım Tamam: Dış numara da açtı! İki çağrıyı kesin olarak konferansta birleştir:
+                                              tryMergeCalls()
+                                              setMuted(true)
+                                              HotspotLanBridge.send("BRIDGE_CONNECTED")
+                                          }
+                                      } else if (isIncomingConferenceMode) {
+                                          if (call == externalGsmCall && sipBridgeCall == null) {
+                                              // Gelen dış arama açıldı! Şimdi S25 Ultra SIP numarasını ara:
+                                              setMuted(true)
+                                              HotspotLanBridge.send("BRIDGE_RINGING_SIP")
+                                              dialNumber(sipBridgeDidNumber)
+                                          } else if (call == sipBridgeCall && externalGsmCall != null) {
+                                              // S25 Ultra SIP hattını açtı! İki çağrıyı konferansta birleştir:
+                                              tryMergeCalls()
+                                              setMuted(true)
+                                              HotspotLanBridge.send("BRIDGE_CONNECTED")
                                           }
                                       }
                                   }
                                   Call.STATE_DISCONNECTED -> {
-                                      if (isOutgoingBridgeMode) {
+                                      if (isOutgoingSipFirstMode || isIncomingConferenceMode) {
                                           hangupAllCalls()
                                       } else {
                                           HotspotLanBridge.send("ENDED")
@@ -1086,7 +1143,9 @@ jobs:
                           }
                       })
 
-                      if (!isOutgoingBridgeMode && call.state == Call.STATE_RINGING) {
+                      // Yeni gelen dış GSM araması
+                      if (!isOutgoingSipFirstMode && !isIncomingConferenceMode && call.state == Call.STATE_RINGING) {
+                          externalGsmCall = call
                           val hostContactName = ContactHelper.getContactName(this, number) ?: ""
                           val callerPayload = "$number~$hostContactName"
 
@@ -1104,6 +1163,19 @@ jobs:
                       }
                   }
 
+                  private fun tryMergeCalls() {
+                      val ext = externalGsmCall
+                      val sip = sipBridgeCall
+                      if (ext != null && sip != null) {
+                          try {
+                              ext.conference(sip)
+                          } catch (_: Exception) {}
+                          try {
+                              sip.conference(ext)
+                          } catch (_: Exception) {}
+                      }
+                  }
+
                   fun answerLocalCall() {
                       calls.firstOrNull { it.state == Call.STATE_RINGING }
                           ?.answer(VideoProfile.STATE_AUDIO_ONLY)
@@ -1118,22 +1190,18 @@ jobs:
                   }
 
                   fun hangupAllCalls() {
-                      isOutgoingBridgeMode = false
+                      isIncomingConferenceMode = false
+                      isOutgoingSipFirstMode = false
+                      pendingExternalTargetNumber = ""
                       setMuted(false)
                       calls.forEach {
-                          if (it.state == Call.STATE_RINGING) it.reject(false, null) else it.disconnect()
+                          try {
+                              if (it.state == Call.STATE_RINGING) it.reject(false, null) else it.disconnect()
+                          } catch (_: Exception) {}
                       }
-                      targetExternalCall = null
+                      externalGsmCall = null
                       sipBridgeCall = null
                       HotspotLanBridge.send("ENDED")
-                  }
-
-                  @SuppressLint("MissingPermission")
-                  fun configureForwarding(context: Context, sipNumber: String, enable: Boolean) {
-                      sipBridgeDidNumber = sipNumber
-                      val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                      val ussd = if (enable) "*67*$sipNumber#" else "#67#"
-                      tm.placeCall(Uri.parse("tel:" + Uri.encode(ussd)), Bundle())
                   }
               }
           """)
@@ -1164,6 +1232,7 @@ jobs:
                   private var isMuted = false
                   private var isSpeakerOn = false
                   private var isLocalFallback = false
+                  private var isOutgoingCall = false
                   private var rawPhoneNumber: String = ""
                   private var resolvedContactName: String? = null
 
@@ -1178,7 +1247,7 @@ jobs:
                       super.onCreate(savedInstanceState)
                       setContentView(R.layout.activity_remote_call)
 
-                      val isOutgoing = intent.getBooleanExtra("IS_OUTGOING", false)
+                      isOutgoingCall = intent.getBooleanExtra("IS_OUTGOING", false)
                       isLocalFallback = intent.getBooleanExtra("IS_LOCAL_FALLBACK", false)
                       val callerPayload = intent.getStringExtra("CALLER_NUMBER") ?: "Bilinmeyen Numara"
 
@@ -1205,8 +1274,8 @@ jobs:
                       acquireProximitySensorLock()
                       HotspotLanBridge.addListener(this)
 
-                      if (isOutgoing) {
-                          updateStatusText("Aranıyor...")
+                      if (isOutgoingCall) {
+                          updateStatusText("Önce S25 Ultra SIP Köprüsü Kuruluyor...")
                           btnAnswer.visibility = View.GONE
                           spaceBetween.visibility = View.GONE
                       } else {
@@ -1216,7 +1285,14 @@ jobs:
                       }
 
                       SipAudioEngine.onCallConnected = {
-                          runOnUiThread { switchToActiveCallUi() }
+                          runOnUiThread {
+                              if (isOutgoingCall) {
+                                  updateStatusText("SIP Bağlandı, Dış Numara Aranıyor...")
+                                  layoutInCallControls.visibility = View.VISIBLE
+                              } else {
+                                  switchToActiveCallUi()
+                              }
+                          }
                       }
 
                       SipAudioEngine.onCallTerminated = {
@@ -1252,7 +1328,7 @@ jobs:
                               HostInCallService.instance?.answerLocalCall()
                               switchToActiveCallUi()
                           } else {
-                              updateStatusText("Bağlanıyor...")
+                              updateStatusText("Konferans Köprüsü Kuruluyor...")
                               SipAudioEngine.prepareForIncomingAudio()
                               HotspotLanBridge.send("ANSWER")
                           }
@@ -1279,14 +1355,15 @@ jobs:
 
                   override fun onEvent(event: String, data: String) {
                       when (event) {
-                          "OUTGOING_RINGING_SIP" -> updateStatusText("Karşı taraf açtı, bağlanıyor...")
-                          "OUTGOING_CONNECTED" -> switchToActiveCallUi()
+                          "BRIDGE_RINGING_SIP" -> updateStatusText("S25 Ultra SIP Hattı Aranıyor...")
+                          "OUTGOING_DIALING_EXTERNAL" -> updateStatusText("Dış Numara Çalıyor...")
+                          "BRIDGE_CONNECTED" -> switchToActiveCallUi()
                           "ENDED" -> cleanupAndFinish()
                       }
                   }
 
                   private fun switchToActiveCallUi() {
-                      updateStatusText("Görüşme Aktif")
+                      updateStatusText("Görüşme Aktif (Konferans)")
                       btnAnswer.visibility = View.GONE
                       spaceBetween.visibility = View.GONE
                       layoutInCallControls.visibility = View.VISIBLE
@@ -1448,13 +1525,11 @@ jobs:
                               .putString("saved_mode", "HOST")
                               .apply()
 
+                          HostInCallService.sipBridgeDidNumber = sipDid
                           requestDefaultDialerRole()
-                          if (sipDid.isNotEmpty()) {
-                              HostInCallService().configureForwarding(this, sipDid, true)
-                          }
                           startKeepAliveService("HOST")
                           cardSetupPanel.visibility = View.GONE
-                          tvConnectionStatus.text = "● Note 10 Lite (Ana Hat) Aktif - Hotspot Açık Olmalı"
+                          tvConnectionStatus.text = "● Note 10 Lite (Konferans Köprüsü) Aktif"
                       }
 
                       findViewById<Button>(R.id.btnStartClient).setOnClickListener {
@@ -1493,6 +1568,7 @@ jobs:
                               }
                               startActivity(callIntent)
                           } else {
+                              // Önce S25 Ultra SIP motorunu otomatik yanıta hazırla, sonra Note 10 Lite'a DIAL gönder
                               SipAudioEngine.prepareForIncomingAudio()
                               HotspotLanBridge.send("DIAL", targetNumber)
                               val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
@@ -1795,7 +1871,7 @@ jobs:
                               <TextView
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
-                                  android:text="Cihaz Rolü ve SIP Yapılandırması"
+                                  android:text="Konferans Köprüsü &amp; SIP Ayarları"
                                   android:textColor="#8AB4F8"
                                   android:textSize="14sp"
                                   android:textStyle="bold" />
@@ -2327,5 +2403,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v2.6.1-APK
+          name: RemotePhone-v2.8.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
