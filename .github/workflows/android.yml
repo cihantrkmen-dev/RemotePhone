@@ -73,8 +73,8 @@ jobs:
                       applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 20
-                      versionName = "4.1.0"
+                      versionCode = 21
+                      versionName = "4.2.0"
                   }
 
                   buildTypes {
@@ -126,6 +126,7 @@ jobs:
                   <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
                   <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
                   <uses-permission android:name="android.permission.READ_CONTACTS" />
+                  <uses-permission android:name="android.permission.READ_CALL_LOG" />
                   <uses-permission android:name="android.permission.RECORD_AUDIO" />
                   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
                   <uses-permission android:name="android.permission.BLUETOOTH" />
@@ -134,6 +135,7 @@ jobs:
                   <uses-permission android:name="android.permission.INTERNET" />
                   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
                   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+                  <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
                   <uses-permission android:name="android.permission.WAKE_LOCK" />
                   <uses-permission android:name="android.permission.VIBRATE" />
@@ -204,7 +206,7 @@ jobs:
                           android:foregroundServiceType="specialUse">
                           <property
                               android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                              android:value="Continuous local Wi-Fi / Hotspot call signaling and Bluetooth audio routing" />
+                              android:value="Continuous local Wi-Fi and Hotspot call signaling bridge" />
                       </service>
 
                   </application>
@@ -221,13 +223,19 @@ jobs:
               import android.provider.CallLog
               import android.provider.ContactsContract
               import androidx.core.content.ContextCompat
+              import java.text.SimpleDateFormat
+              import java.util.Date
+              import java.util.Locale
 
               data class ContactItem(val name: String, val number: String)
-              data class CallLogItem(val name: String, val number: String, val type: String, val date: Long)
+              data class CallLogItem(val name: String, val number: String, val type: String, val timeText: String)
 
               object ContactHelper {
                   @Volatile
                   var syncedHostContacts: List<ContactItem> = emptyList()
+
+                  @Volatile
+                  var syncedHostCallLogs: List<CallLogItem> = emptyList()
 
                   fun getContactName(context: Context, phoneNumber: String): String? {
                       val cleanNumber = phoneNumber.trim()
@@ -300,11 +308,10 @@ jobs:
                   fun getRecentCalls(context: Context): List<CallLogItem> {
                       val list = mutableListOf<CallLogItem>()
                       if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG)
-                          == PackageManager.PERMISSION_GRANTED ||
-                          ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS)
                           == PackageManager.PERMISSION_GRANTED
                       ) {
                           try {
+                              val sdf = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
                               val projection = arrayOf(
                                   CallLog.Calls.CACHED_NAME,
                                   CallLog.Calls.NUMBER,
@@ -316,29 +323,35 @@ jobs:
                                   projection,
                                   null,
                                   null,
-                                  CallLog.Calls.DATE + " DESC LIMIT 50"
+                                  CallLog.Calls.DATE + " DESC"
                               )?.use { cursor ->
                                   val nameIdx = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME)
                                   val numIdx = cursor.getColumnIndex(CallLog.Calls.NUMBER)
                                   val typeIdx = cursor.getColumnIndex(CallLog.Calls.TYPE)
                                   val dateIdx = cursor.getColumnIndex(CallLog.Calls.DATE)
-                                  while (cursor.moveToNext()) {
+                                  var count = 0
+                                  while (cursor.moveToNext() && count < 40) {
                                       val number = if (numIdx >= 0) cursor.getString(numIdx) ?: "" else ""
                                       if (number.isBlank()) continue
                                       val resolvedName = if (nameIdx >= 0) cursor.getString(nameIdx) else null
-                                      val name = resolvedName ?: getContactName(context, number) ?: number
+                                      val name = if (!resolvedName.isNullOrBlank()) resolvedName else (getContactName(context, number) ?: number)
                                       val typeInt = if (typeIdx >= 0) cursor.getInt(typeIdx) else CallLog.Calls.MISSED_TYPE
                                       val type = when (typeInt) {
-                                          CallLog.Calls.INCOMING_TYPE -> "Gelen"
-                                          CallLog.Calls.OUTGOING_TYPE -> "Giden"
-                                          CallLog.Calls.MISSED_TYPE -> "Cevapsız"
-                                          else -> "Diğer"
+                                          CallLog.Calls.INCOMING_TYPE -> "↙ Gelen"
+                                          CallLog.Calls.OUTGOING_TYPE -> "↗ Giden"
+                                          CallLog.Calls.MISSED_TYPE -> "✖ Cevapsız"
+                                          CallLog.Calls.REJECTED_TYPE -> "✖ Reddedilen"
+                                          else -> "• Arama"
                                       }
-                                      val date = if (dateIdx >= 0) cursor.getLong(dateIdx) else System.currentTimeMillis()
-                                      list.add(CallLogItem(name, number, type, date))
+                                      val dateMs = if (dateIdx >= 0) cursor.getLong(dateIdx) else System.currentTimeMillis()
+                                      list.add(CallLogItem(name, number, type, sdf.format(Date(dateMs))))
+                                      count++
                                   }
                               }
                           } catch (_: Exception) {}
+                      }
+                      if (list.isEmpty() && syncedHostCallLogs.isNotEmpty()) {
+                          return syncedHostCallLogs
                       }
                       return list
                   }
@@ -365,6 +378,30 @@ jobs:
                       }
                   }
 
+                  fun serializeCallLogs(context: Context): String {
+                      return getRecentCalls(context).take(35).joinToString(";") { item ->
+                          val safeName = item.name.replace(";", " ").replace("~", " ").replace("|", " ")
+                          val safeNum = item.number.replace(";", "").replace("~", "").replace("|", "")
+                          val safeType = item.type.replace(";", "").replace("~", "").replace("|", "")
+                          val safeTime = item.timeText.replace(";", "").replace("~", "").replace("|", "")
+                          "$safeName~$safeNum~$safeType~$safeTime"
+                      }
+                  }
+
+                  fun updateSyncedCallLogs(serialized: String) {
+                      if (serialized.isBlank()) return
+                      val list = mutableListOf<CallLogItem>()
+                      for (entry in serialized.split(";")) {
+                          val parts = entry.split("~", limit = 4)
+                          if (parts.size == 4) {
+                              list.add(CallLogItem(parts[0], parts[1], parts[2], parts[3]))
+                          }
+                      }
+                      if (list.isNotEmpty()) {
+                          syncedHostCallLogs = list
+                      }
+                  }
+
                   fun resolveCallerInfo(context: Context, payload: String): Pair<String, String?> {
                       val parts = payload.split("~", limit = 2)
                       val rawNumber = parts[0].ifBlank { "Bilinmeyen Numara" }
@@ -375,7 +412,7 @@ jobs:
               }
           """)
 
-          # HotspotLanBridge.kt: Ortak Wi-Fi / Hotspot Ağ Geçidini Otomatik Bulan Dinamik Bağlantı Yöneticisi
+          # HotspotLanBridge.kt: Hem Hotspot Gateway hem de Ortak Wi-Fi Ağı İçin UDP Otomatik IP Keşfi (Port 8990) + TCP Köprüsü (Port 8989)
           write_file("app/src/main/java/com/example/remotephone/HotspotLanBridge.kt", r"""
               package com.example.remotephone
 
@@ -386,14 +423,20 @@ jobs:
               import java.io.BufferedReader
               import java.io.InputStreamReader
               import java.io.PrintWriter
+              import java.net.DatagramPacket
+              import java.net.DatagramSocket
+              import java.net.Inet4Address
+              import java.net.InetAddress
               import java.net.InetSocketAddress
+              import java.net.NetworkInterface
               import java.net.ServerSocket
               import java.net.Socket
               import java.util.concurrent.CopyOnWriteArraySet
 
               object HotspotLanBridge {
-                  private const val PORT = 8989
-                  private const val SOCKET_TIMEOUT_MS = 15_000
+                  private const val TCP_PORT = 8989
+                  private const val UDP_DISCOVERY_PORT = 8990
+                  private const val SOCKET_TIMEOUT_MS = 18_000
                   private const val HEARTBEAT_INTERVAL_MS = 8_000L
 
                   interface Listener {
@@ -405,13 +448,18 @@ jobs:
                   private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
                   private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
                   private var serverSocket: ServerSocket? = null
+                  private var udpSocket: DatagramSocket? = null
                   private var currentSocket: Socket? = null
                   private var writer: PrintWriter? = null
                   private var activeJob: Job? = null
+                  private var discoveryJob: Job? = null
 
                   @Volatile
                   var isConnected: Boolean = false
                       private set
+
+                  @Volatile
+                  private var discoveredHostIp: String? = null
 
                   fun addListener(listener: Listener) {
                       listeners.add(listener)
@@ -424,10 +472,38 @@ jobs:
 
                   fun startHostServer() {
                       stop()
+                      // 1. Ortak Wi-Fi ağında S25 Ultra'nın Note 10 Lite IP'sini anında bulması için UDP Keşif Yanıtlayıcısı
+                      discoveryJob = scope.launch {
+                          while (isActive) {
+                              try {
+                                  val dSocket = DatagramSocket(UDP_DISCOVERY_PORT).apply {
+                                      broadcast = true
+                                      reuseAddress = true
+                                  }
+                                  udpSocket = dSocket
+                                  val buf = ByteArray(256)
+                                  while (isActive && !dSocket.isClosed) {
+                                      val pkt = DatagramPacket(buf, buf.size)
+                                      dSocket.receive(pkt)
+                                      val msg = String(pkt.data, 0, pkt.length).trim()
+                                      if (msg == "DISCOVER_REMOTEPHONE_HOST") {
+                                          val reply = "REMOTEPHONE_HOST_HERE".toByteArray()
+                                          dSocket.send(DatagramPacket(reply, reply.size, pkt.address, pkt.port))
+                                      }
+                                  }
+                              } catch (_: Exception) {
+                                  delay(2000)
+                              } finally {
+                                  try { udpSocket?.close() } catch (_: Exception) {}
+                              }
+                          }
+                      }
+
+                      // 2. Ana TCP Kontrol Sunucusu
                       activeJob = scope.launch {
                           while (isActive) {
                               try {
-                                  serverSocket = ServerSocket(PORT).apply { reuseAddress = true }
+                                  serverSocket = ServerSocket(TCP_PORT).apply { reuseAddress = true }
                                   while (isActive) {
                                       val client = serverSocket!!.accept()
                                       handleSocket(client)
@@ -447,42 +523,115 @@ jobs:
                       activeJob = scope.launch {
                           var backoffDelay = 2000L
                           while (isActive) {
-                              try {
-                                  val hostIp = getActiveGatewayOrHostIp(appCtx)
-                                  if (!hostIp.isNullOrEmpty()) {
-                                      val socket = Socket()
-                                      socket.connect(InetSocketAddress(hostIp, PORT), 3000)
+                              if (!isConnected) {
+                                  val connectedSocket = tryConnectToHost(appCtx)
+                                  if (connectedSocket != null) {
                                       backoffDelay = 2000L
-                                      handleSocket(socket)
+                                      handleSocket(connectedSocket)
+                                  } else {
+                                      notifyConnection(false)
                                   }
-                              } catch (_: Exception) {
-                                  notifyConnection(false)
                               }
                               delay(backoffDelay)
-                              if (backoffDelay < 10_000L) backoffDelay += 1000L
+                              if (backoffDelay < 8_000L) backoffDelay += 1000L
                           }
                       }
                   }
 
+                  // S25 Ultra ekranı açıldığında veya ağ değiştiğinde bağlantıyı milisaniyeler içinde tazeleyen tetikleyici
                   fun triggerScreenWakeRefresh(context: Context) {
-                      if (!isConnected) {
-                          scope.launch {
+                      val appCtx = context.applicationContext
+                      scope.launch {
+                          if (!isConnected) {
+                              val connectedSocket = tryConnectToHost(appCtx)
+                              if (connectedSocket != null) {
+                                  handleSocket(connectedSocket)
+                              }
+                          } else {
                               try {
-                                  val hostIp = getActiveGatewayOrHostIp(context)
-                                  if (!hostIp.isNullOrEmpty()) {
-                                      val socket = Socket()
-                                      socket.connect(InetSocketAddress(hostIp, PORT), 2000)
-                                      handleSocket(socket)
+                                  writer?.println("PING|WAKE")
+                                  if (writer?.checkError() == true) {
+                                      currentSocket?.close()
                                   }
+                              } catch (_: Exception) {
+                                  try { currentSocket?.close() } catch (_: Exception) {}
+                              }
+                          }
+                      }
+                  }
+
+                  // Hem Hotspot Gateway IP'sini hem de Ortak Wi-Fi Ağındaki Note 10 Lite IP'sini bularak bağlanır
+                  private fun tryConnectToHost(context: Context): Socket? {
+                      val candidates = linkedSetOf<String>()
+                      discoveredHostIp?.let { candidates.add(it) }
+                      getActiveGatewayIp(context)?.let { candidates.add(it) }
+                      candidates.add("192.168.43.1")
+
+                      // Ortak Wi-Fi ağı için hızlı UDP Broadcast taraması (Note 10 Lite'ın yerel IP'sini bulur)
+                      discoverHostViaUdpBroadcast()?.let { foundIp ->
+                          discoveredHostIp = foundIp
+                          candidates.add(foundIp)
+                      }
+
+                      for (ip in candidates) {
+                          try {
+                              val s = Socket()
+                              s.connect(InetSocketAddress(ip, TCP_PORT), 1800)
+                              discoveredHostIp = ip
+                              return s
+                          } catch (_: Exception) {}
+                      }
+                      return null
+                  }
+
+                  private fun discoverHostViaUdpBroadcast(): String? {
+                      var tempSocket: DatagramSocket? = null
+                      try {
+                          tempSocket = DatagramSocket().apply {
+                              broadcast = true
+                              soTimeout = 700
+                          }
+                          val req = "DISCOVER_REMOTEPHONE_HOST".toByteArray()
+                          val broadcastTargets = mutableSetOf("255.255.255.255")
+
+                          val interfaces = NetworkInterface.getNetworkInterfaces()
+                          while (interfaces.hasMoreElements()) {
+                              val intf = interfaces.nextElement()
+                              if (!intf.isUp || intf.isLoopback) continue
+                              for (ia in intf.interfaceAddresses) {
+                                  val bcast = ia.broadcast
+                                  if (bcast is Inet4Address) {
+                                      bcast.hostAddress?.let { broadcastTargets.add(it) }
+                                  }
+                              }
+                          }
+
+                          for (target in broadcastTargets) {
+                              try {
+                                  tempSocket.send(
+                                      DatagramPacket(req, req.size, InetAddress.getByName(target), UDP_DISCOVERY_PORT)
+                                  )
                               } catch (_: Exception) {}
                           }
-                      } else {
-                          send("PING", "WAKE")
+
+                          val buf = ByteArray(256)
+                          val respPkt = DatagramPacket(buf, buf.size)
+                          tempSocket.receive(respPkt)
+                          val reply = String(respPkt.data, 0, respPkt.length).trim()
+                          if (reply == "REMOTEPHONE_HOST_HERE") {
+                              return respPkt.address?.hostAddress
+                          }
+                      } catch (_: Exception) {
+                      } finally {
+                          try { tempSocket?.close() } catch (_: Exception) {}
                       }
+                      return null
                   }
 
                   fun stop() {
                       activeJob?.cancel()
+                      discoveryJob?.cancel()
+                      try { udpSocket?.close() } catch (_: Exception) {}
                       try { currentSocket?.close() } catch (_: Exception) {}
                       try { serverSocket?.close() } catch (_: Exception) {}
                       notifyConnection(false)
@@ -558,8 +707,7 @@ jobs:
                       }
                   }
 
-                  // Hem Hotspot ağ geçidini hem de ortak Wi-Fi router IP'sini dinamik olarak tespit eder
-                  private fun getActiveGatewayOrHostIp(context: Context): String? {
+                  private fun getActiveGatewayIp(context: Context): String? {
                       val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                       val network = cm.activeNetwork ?: return "192.168.43.1"
                       val linkProps: LinkProperties = cm.getLinkProperties(network) ?: return "192.168.43.1"
@@ -574,7 +722,284 @@ jobs:
               }
           """)
 
-          # HostInCallService.kt: Note 10 Lite Ana Hat Servisi + Bluetooth Kulaklık Yönlendirme + Telemetri
+          # BridgeKeepAliveService.kt: Eksik Olan Ön Plan Servisi + Ekran Açılma (ACTION_SCREEN_ON) ve Ağ Değişimi Dinleyicisi
+          write_file("app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt", r"""
+              package com.example.remotephone
+
+              import android.annotation.SuppressLint
+              import android.app.Notification
+              import android.app.NotificationChannel
+              import android.app.NotificationManager
+              import android.app.PendingIntent
+              import android.app.Service
+              import android.bluetooth.BluetoothAdapter
+              import android.content.BroadcastReceiver
+              import android.content.Context
+              import android.content.Intent
+              import android.content.IntentFilter
+              import android.content.pm.ServiceInfo
+              import android.net.ConnectivityManager
+              import android.net.Network
+              import android.net.wifi.WifiManager
+              import android.os.BatteryManager
+              import android.os.Build
+              import android.os.IBinder
+              import android.os.PowerManager
+              import androidx.core.app.NotificationCompat
+              import androidx.core.app.ServiceCompat
+
+              class BridgeKeepAliveService : Service(), HotspotLanBridge.Listener {
+
+                  companion object {
+                      private const val CHANNEL_ID = "RemotePhoneKeepAliveChannel"
+                      private const val CALL_CHANNEL_ID = "IncomingRemoteCallChannel"
+                      private const val NOTIFICATION_ID = 1001
+                      const val CALL_NOTIFICATION_ID = 2002
+                  }
+
+                  private var wakeLock: PowerManager.WakeLock? = null
+                  private var wifiLock: WifiManager.WifiLock? = null
+                  private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+                  private val screenWakeReceiver = object : BroadcastReceiver() {
+                      override fun onReceive(context: Context?, intent: Intent?) {
+                          when (intent?.action) {
+                              Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                                  HotspotLanBridge.triggerScreenWakeRefresh(this@BridgeKeepAliveService)
+                              }
+                          }
+                      }
+                  }
+
+                  override fun onCreate() {
+                      super.onCreate()
+                      createNotificationChannels()
+                      acquireHardwareLocks()
+                      HotspotLanBridge.addListener(this)
+
+                      val filter = IntentFilter().apply {
+                          addAction(Intent.ACTION_SCREEN_ON)
+                          addAction(Intent.ACTION_USER_PRESENT)
+                      }
+                      registerReceiver(screenWakeReceiver, filter)
+                      registerNetworkChangeWatcher()
+                  }
+
+                  private fun registerNetworkChangeWatcher() {
+                      try {
+                          val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                          val cb = object : ConnectivityManager.NetworkCallback() {
+                              override fun onAvailable(network: Network) {
+                                  HotspotLanBridge.triggerScreenWakeRefresh(this@BridgeKeepAliveService)
+                              }
+                          }
+                          networkCallback = cb
+                          cm.registerDefaultNetworkCallback(cb)
+                      } catch (_: Exception) {}
+                  }
+
+                  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      val mode = intent?.getStringExtra("MODE") ?: prefs.getString("saved_mode", "NONE") ?: "NONE"
+
+                      val roleText = when (mode) {
+                          "HOST" -> "1. Telefon (Note 10 Lite Ana Hat) Aktif"
+                          "CLIENT" -> "2. Telefon (S25 Ultra Uzak Kontrolcü) Aktif"
+                          else -> "Servis Hazır"
+                      }
+
+                      val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                          .setContentTitle("Telefon Köprüsü")
+                          .setContentText(roleText)
+                          .setSmallIcon(R.drawable.ic_launcher)
+                          .setOngoing(true)
+                          .setPriority(NotificationCompat.PRIORITY_LOW)
+                          .build()
+
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                          ServiceCompat.startForeground(
+                              this,
+                              NOTIFICATION_ID,
+                              notification,
+                              ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                          )
+                      } else {
+                          startForeground(NOTIFICATION_ID, notification)
+                      }
+
+                      if (mode == "HOST") {
+                          HotspotLanBridge.startHostServer()
+                      } else if (mode == "CLIENT") {
+                          HotspotLanBridge.startClientAutoConnect(this)
+                      }
+
+                      return START_STICKY
+                  }
+
+                  override fun onConnectionChanged(connected: Boolean) {
+                      if (connected) {
+                          val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                          val mode = prefs.getString("saved_mode", "")
+                          if (mode == "CLIENT") {
+                              HotspotLanBridge.send("REQ_CONTACTS")
+                          } else if (mode == "HOST") {
+                              sendHostTelemetry()
+                          }
+                      }
+                  }
+
+                  @SuppressLint("MissingPermission")
+                  private fun sendHostTelemetry() {
+                      try {
+                          val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                          val pct = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
+                          val btOn = BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
+                          val btText = if (btOn) "Kulaklık: Hazır" else "BT: Kapalı"
+                          HotspotLanBridge.send("TELEMETRY", "Note 10 Lite Pil: %$pct | $btText")
+                      } catch (_: Exception) {}
+                  }
+
+                  @SuppressLint("MissingPermission")
+                  override fun onEvent(event: String, data: String) {
+                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      val mode = prefs.getString("saved_mode", "")
+
+                      when (event) {
+                          "INCOMING" -> {
+                              if (mode == "CLIENT") {
+                                  showIncomingCallNotification(data, isLocalHostFallback = false)
+                              }
+                          }
+                          "ENDED" -> {
+                              val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                              nm.cancel(CALL_NOTIFICATION_ID)
+                          }
+                          "DIAL" -> {
+                              // Note 10 Lite'ta henüz aktif çağrı yokken S25 Ultra'dan arama emri gelirse doğrudan başlat
+                              if (mode == "HOST" && HostInCallService.instance == null && data.isNotEmpty()) {
+                                  HostInCallService.placeSystemCall(this, data)
+                              }
+                          }
+                          "REQ_CONTACTS" -> {
+                              if (mode == "HOST") {
+                                  val contactsPayload = ContactHelper.serializeContacts(this)
+                                  if (contactsPayload.isNotEmpty()) {
+                                      HotspotLanBridge.send("RES_CONTACTS", contactsPayload)
+                                  }
+                                  val logsPayload = ContactHelper.serializeCallLogs(this)
+                                  if (logsPayload.isNotEmpty()) {
+                                      HotspotLanBridge.send("RES_CALLLOGS", logsPayload)
+                                  }
+                                  sendHostTelemetry()
+                              }
+                          }
+                          "RES_CONTACTS" -> {
+                              ContactHelper.updateSyncedContacts(data)
+                          }
+                          "RES_CALLLOGS" -> {
+                              ContactHelper.updateSyncedCallLogs(data)
+                          }
+                      }
+                  }
+
+                  fun showIncomingCallNotification(callerPayload: String, isLocalHostFallback: Boolean) {
+                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      val (rawNumber, resolvedName) = ContactHelper.resolveCallerInfo(this, callerPayload)
+                      val displayTitle = resolvedName ?: rawNumber
+                      val displaySubText = if (resolvedName != null) "$rawNumber • Gelen Arama" else "Gelen Arama"
+
+                      val fullScreenIntent = Intent(this, RemoteCallActivity::class.java).apply {
+                          flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                          putExtra("CALLER_NUMBER", callerPayload)
+                          putExtra("IS_OUTGOING", false)
+                          putExtra("IS_LOCAL_FALLBACK", isLocalHostFallback)
+                      }
+                      val fullScreenPendingIntent = PendingIntent.getActivity(
+                          this, 0, fullScreenIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+
+                      val notification = NotificationCompat.Builder(this, CALL_CHANNEL_ID)
+                          .setSmallIcon(R.drawable.ic_launcher)
+                          .setContentTitle(displayTitle)
+                          .setContentText(displaySubText)
+                          .setPriority(NotificationCompat.PRIORITY_MAX)
+                          .setCategory(NotificationCompat.CATEGORY_CALL)
+                          .setFullScreenIntent(fullScreenPendingIntent, true)
+                          .setOngoing(true)
+                          .setAutoCancel(true)
+                          .build()
+
+                      nm.notify(CALL_NOTIFICATION_ID, notification)
+                      try {
+                          startActivity(fullScreenIntent)
+                      } catch (_: Exception) {}
+                  }
+
+                  private fun acquireHardwareLocks() {
+                      val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                      wakeLock = powerManager.newWakeLock(
+                          PowerManager.PARTIAL_WAKE_LOCK,
+                          "RemotePhone::BridgeWakeLock"
+                      ).apply {
+                          setReferenceCounted(false)
+                          acquire()
+                      }
+
+                      val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                      val lockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                          WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                      } else {
+                          @Suppress("DEPRECATION")
+                          WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                      }
+                      wifiLock = wifiManager.createWifiLock(lockMode, "RemotePhone::BridgeWifiLock").apply {
+                          setReferenceCounted(false)
+                          acquire()
+                      }
+                  }
+
+                  override fun onDestroy() {
+                      HotspotLanBridge.removeListener(this)
+                      try { unregisterReceiver(screenWakeReceiver) } catch (_: Exception) {}
+                      try {
+                          val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                          networkCallback?.let { cm.unregisterNetworkCallback(it) }
+                      } catch (_: Exception) {}
+                      try {
+                          if (wakeLock?.isHeld == true) wakeLock?.release()
+                          if (wifiLock?.isHeld == true) wifiLock?.release()
+                      } catch (_: Exception) {}
+                      super.onDestroy()
+                  }
+
+                  override fun onBind(intent: Intent?): IBinder? = null
+
+                  private fun createNotificationChannels() {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          val nm = getSystemService(NotificationManager::class.java)
+                          nm.createNotificationChannel(
+                              NotificationChannel(
+                                  CHANNEL_ID,
+                                  "Arka Plan Bağlantı Servisi",
+                                  NotificationManager.IMPORTANCE_LOW
+                              )
+                          )
+                          nm.createNotificationChannel(
+                              NotificationChannel(
+                                  CALL_CHANNEL_ID,
+                                  "Gelen Çağrı Uyarıları",
+                                  NotificationManager.IMPORTANCE_HIGH
+                              ).apply {
+                                  lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                              }
+                          )
+                      }
+                  }
+              }
+          """)
+
+          # HostInCallService.kt: Eksik Olan Yerel Yedekleme Metotları (answerLocalCall, hangupAllCalls vb.) + 8 Saniye Çift Ekran Yedeklemesi
           write_file("app/src/main/java/com/example/remotephone/HostInCallService.kt", r"""
               package com.example.remotephone
 
@@ -591,6 +1016,7 @@ jobs:
               import android.telecom.Call
               import android.telecom.CallAudioState
               import android.telecom.InCallService
+              import android.telecom.PhoneAccountHandle
               import android.telecom.TelecomManager
               import android.telecom.VideoProfile
 
@@ -604,9 +1030,15 @@ jobs:
                           val clean = rawNumber.trim()
                           if (clean.isEmpty()) return
                           val uri = Uri.parse("tel:" + Uri.encode(clean))
+                          val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+                          val extras = Bundle()
                           try {
-                              val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                              tm.placeCall(uri, Bundle())
+                              val account: PhoneAccountHandle? = tm.getDefaultOutgoingPhoneAccount("tel")
+                                  ?: tm.callCapablePhoneAccounts.firstOrNull()
+                              if (account != null) {
+                                  extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, account)
+                              }
+                              tm.placeCall(uri, extras)
                           } catch (_: Exception) {
                               try {
                                   val callIntent = Intent(Intent.ACTION_CALL, uri).apply {
@@ -627,12 +1059,14 @@ jobs:
                       HotspotLanBridge.addListener(this)
 
                       handler.post(object : Runnable {
+                          @SuppressLint("MissingPermission")
                           override fun run() {
                               if (HotspotLanBridge.isConnected) {
-                                  val batteryManager = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-                                  val batteryPct = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
-                                  val btStatus = if (BluetoothAdapter.getDefaultAdapter()?.isEnabled == true) "BT: Açık" else "BT: Kapalı"
-                                  HotspotLanBridge.send("TELEMETRY", "Pil: %$batteryPct | $btStatus")
+                                  val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                                  val pct = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
+                                  val btOn = BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
+                                  val btStatus = if (btOn) "Kulaklık: Hazır" else "BT: Kapalı"
+                                  HotspotLanBridge.send("TELEMETRY", "Note 10 Lite Pil: %$pct | $btStatus")
                               }
                               handler.postDelayed(this, 15_000L)
                           }
@@ -647,17 +1081,20 @@ jobs:
                   }
 
                   @SuppressLint("MissingPermission")
-                  private fun routeAudioToBluetooth() {
+                  private fun routeAudioToBluetoothOrEarpiece() {
                       try {
                           val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
                           am?.mode = AudioManager.MODE_IN_COMMUNICATION
-                          am?.isBluetoothScoOn = true
-                          am?.startBluetoothSco()
-                          setAudioRoute(CallAudioState.ROUTE_BLUETOOTH)
-                      } catch (_: Exception) {
-                          try {
+                          val btEnabled = BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
+                          if (btEnabled) {
+                              am?.isBluetoothScoOn = true
+                              am?.startBluetoothSco()
+                              setAudioRoute(CallAudioState.ROUTE_BLUETOOTH)
+                          } else {
                               setAudioRoute(CallAudioState.ROUTE_EARPIECE)
-                          } catch (_: Exception) {}
+                          }
+                      } catch (_: Exception) {
+                          try { setAudioRoute(CallAudioState.ROUTE_EARPIECE) } catch (_: Exception) {}
                       }
                   }
 
@@ -667,15 +1104,10 @@ jobs:
                           "ANSWER" -> {
                               val ringing = calls.firstOrNull { it.state == Call.STATE_RINGING } ?: activeCall
                               ringing?.answer(VideoProfile.STATE_AUDIO_ONLY)
-                              routeAudioToBluetooth()
+                              routeAudioToBluetoothOrEarpiece()
                           }
                           "REJECT", "HANGUP" -> {
-                              calls.forEach {
-                                  try {
-                                      if (it.state == Call.STATE_RINGING) it.reject(false, null) else it.disconnect()
-                                  } catch (_: Exception) {}
-                              }
-                              HotspotLanBridge.send("ENDED")
+                              hangupAllCalls()
                           }
                           "DIAL" -> {
                               if (data.isNotEmpty()) {
@@ -687,14 +1119,14 @@ jobs:
                                   activeCall?.playDtmfTone(data[0])
                                   handler.postDelayed({
                                       try { activeCall?.stopDtmfTone() } catch (_: Exception) {}
-                                  }, 150)
+                                  }, 160)
                               }
                           }
                           "MUTE" -> {
-                              setMuted(data == "true")
+                              setLocalMute(data == "true")
                           }
                           "SPEAKER" -> {
-                              setAudioRoute(if (data == "true") CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_BLUETOOTH)
+                              setLocalSpeaker(data == "true")
                           }
                       }
                   }
@@ -707,8 +1139,11 @@ jobs:
                       call.registerCallback(object : Call.Callback() {
                           override fun onStateChanged(call: Call, state: Int) {
                               when (state) {
+                                  Call.STATE_DIALING -> {
+                                      routeAudioToBluetoothOrEarpiece()
+                                  }
                                   Call.STATE_ACTIVE -> {
-                                      routeAudioToBluetooth()
+                                      routeAudioToBluetoothOrEarpiece()
                                       HotspotLanBridge.send("CONNECTED", number)
                                   }
                                   Call.STATE_DISCONNECTED -> {
@@ -719,31 +1154,74 @@ jobs:
                           }
                       })
 
-                      if (call.state == Call.STATE_ACTIVE) {
-                          routeAudioToBluetooth()
+                      if (call.state == Call.STATE_DIALING || call.state == Call.STATE_ACTIVE) {
+                          routeAudioToBluetoothOrEarpiece()
                       }
 
                       if (call.state == Call.STATE_RINGING) {
-                          try {
-                              val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                              tm.silenceRinger()
-                          } catch (_: Exception) {}
-
                           val hostContactName = ContactHelper.getContactName(this, number) ?: ""
                           val callerPayload = "$number~$hostContactName"
 
                           if (HotspotLanBridge.isConnected) {
+                              // S25 Ultra bağlıysa Note 10 Lite'ın zilini sustur ve S25 Ultra'yı uyandır
+                              try {
+                                  val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+                                  tm.silenceRinger()
+                              } catch (_: Exception) {}
                               HotspotLanBridge.send("INCOMING", callerPayload)
+
+                              // 8 Saniye Yedekleme Kuralı: S25 Ultra uzaktaysa ve 8 saniyede açılmazsa Note 10 Lite ekranını da aç
+                              handler.postDelayed({
+                                  if (call.state == Call.STATE_RINGING) {
+                                      launchLocalFallbackScreen(callerPayload)
+                                  }
+                              }, 8_000L)
                           } else {
-                              val intent = Intent(this, RemoteCallActivity::class.java).apply {
-                                  flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                                  putExtra("CALLER_NUMBER", callerPayload)
-                                  putExtra("IS_OUTGOING", false)
-                                  putExtra("IS_LOCAL_FALLBACK", true)
-                              }
-                              startActivity(intent)
+                              // Bağımsız mod: S25 Ultra bağlı değilse doğrudan Note 10 Lite ekranını aç
+                              launchLocalFallbackScreen(callerPayload)
                           }
                       }
+                  }
+
+                  private fun launchLocalFallbackScreen(callerPayload: String) {
+                      val intent = Intent(this, RemoteCallActivity::class.java).apply {
+                          flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                          putExtra("CALLER_NUMBER", callerPayload)
+                          putExtra("IS_OUTGOING", false)
+                          putExtra("IS_LOCAL_FALLBACK", true)
+                      }
+                      startActivity(intent)
+                  }
+
+                  fun answerLocalCall() {
+                      val ringing = calls.firstOrNull { it.state == Call.STATE_RINGING } ?: activeCall
+                      ringing?.answer(VideoProfile.STATE_AUDIO_ONLY)
+                      routeAudioToBluetoothOrEarpiece()
+                      HotspotLanBridge.send("CONNECTED")
+                  }
+
+                  fun setLocalSpeaker(enabled: Boolean) {
+                      if (enabled) {
+                          setAudioRoute(CallAudioState.ROUTE_SPEAKER)
+                      } else {
+                          routeAudioToBluetoothOrEarpiece()
+                      }
+                  }
+
+                  fun setLocalMute(muted: Boolean) {
+                      setMuted(muted)
+                  }
+
+                  fun hangupAllCalls() {
+                      handler.removeCallbacksAndMessages(null)
+                      setMuted(false)
+                      calls.forEach {
+                          try {
+                              if (it.state == Call.STATE_RINGING) it.reject(false, null) else it.disconnect()
+                          } catch (_: Exception) {}
+                      }
+                      activeCall = null
+                      HotspotLanBridge.send("ENDED")
                   }
               }
           """)
@@ -754,9 +1232,11 @@ jobs:
               import android.app.NotificationManager
               import android.content.Context
               import android.graphics.Color
+              import android.media.AudioFocusRequest
               import android.media.AudioManager
               import android.media.Ringtone
               import android.media.RingtoneManager
+              import android.os.Build
               import android.os.Bundle
               import android.os.PowerManager
               import android.os.SystemClock
@@ -772,6 +1252,7 @@ jobs:
 
                   private var ringtone: Ringtone? = null
                   private var proximityWakeLock: PowerManager.WakeLock? = null
+                  private var audioFocusRequest: AudioFocusRequest? = null
                   private var isMuted = false
                   private var isSpeakerOn = false
                   private var isLocalFallback = false
@@ -809,19 +1290,21 @@ jobs:
                       val btnMute = findViewById<MaterialButton>(R.id.btnMute)
                       val btnSpeaker = findViewById<MaterialButton>(R.id.btnSpeaker)
 
-                      if (!resolvedContactName.isNullOrEmpty()) {
-                          tvCallerNumber.text = resolvedContactName
+                      tvCallerNumber.text = if (!resolvedContactName.isNullOrEmpty()) {
+                          resolvedContactName
                       } else {
-                          tvCallerNumber.text = rawPhoneNumber
+                          rawPhoneNumber
                       }
 
                       acquireProximitySensorLock()
                       HotspotLanBridge.addListener(this)
 
                       if (isOutgoingCall) {
-                          updateStatusText("Aranıyor (Bluetooth Kulaklığa Yönlendiriliyor)...")
+                          requestAutoPauseMedia()
+                          updateStatusText("Aranıyor (Bluetooth Kulaklığa Yönlendirildi)...")
                           btnAnswer.visibility = View.GONE
                           spaceBetween.visibility = View.GONE
+                          layoutInCallControls.visibility = View.VISIBLE
                       } else {
                           updateStatusText("Gelen arama...")
                           val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
@@ -861,6 +1344,7 @@ jobs:
                           } else {
                               updateStatusText("Bağlanıyor (Bluetooth Aktif)...")
                               HotspotLanBridge.send("ANSWER")
+                              switchToActiveCallUi()
                           }
                       }
 
@@ -880,12 +1364,25 @@ jobs:
 
                   private fun requestAutoPauseMedia() {
                       try {
-                          val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-                          am?.requestAudioFocus(
-                              { },
-                              AudioManager.STREAM_MUSIC,
-                              AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
-                          )
+                          val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                                  .build()
+                              audioFocusRequest = req
+                              am.requestAudioFocus(req)
+                          } else {
+                              @Suppress("DEPRECATION")
+                              am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                          }
+                      } catch (_: Exception) {}
+                  }
+
+                  private fun releaseAutoPauseMedia() {
+                      try {
+                          val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+                          }
                       } catch (_: Exception) {}
                   }
 
@@ -905,6 +1402,7 @@ jobs:
                   }
 
                   private fun switchToActiveCallUi() {
+                      ringtone?.stop()
                       updateStatusText("Görüşme Aktif (Bluetooth)")
                       btnAnswer.visibility = View.GONE
                       spaceBetween.visibility = View.GONE
@@ -929,6 +1427,7 @@ jobs:
                   private fun cleanupAndFinish() {
                       ringtone?.stop()
                       chronometer.stop()
+                      releaseAutoPauseMedia()
                       val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                       nm.cancel(BridgeKeepAliveService.CALL_NOTIFICATION_ID)
                       finish()
@@ -937,6 +1436,7 @@ jobs:
                   override fun onDestroy() {
                       HotspotLanBridge.removeListener(this)
                       ringtone?.stop()
+                      releaseAutoPauseMedia()
                       try {
                           if (proximityWakeLock?.isHeld == true) proximityWakeLock?.release()
                       } catch (_: Exception) {}
@@ -988,6 +1488,7 @@ jobs:
                   private lateinit var tvConnectionStatus: TextView
                   private lateinit var etDialNumber: EditText
                   private val NL = Char(10)
+                  private var lastTelemetryText: String = ""
 
                   private val roleLauncher = registerForActivityResult(
                       ActivityResultContracts.StartActivityForResult()
@@ -1043,7 +1544,7 @@ jobs:
                           if (HotspotLanBridge.isConnected) {
                               HotspotLanBridge.send("REQ_CONTACTS")
                           }
-                          showContactsDialog()
+                          showContactsAndLogsDialog()
                       }
 
                       setupGoogleDialpad(etDialNumber)
@@ -1054,7 +1555,7 @@ jobs:
                           requestDefaultDialerRole()
                           startKeepAliveService("HOST")
                           cardSetupPanel.visibility = View.GONE
-                          tvConnectionStatus.text = "● Note 10 Lite (Ana Hat) Aktif"
+                          updateConnectionBanner(HotspotLanBridge.isConnected)
                       }
 
                       findViewById<Button>(R.id.btnStartClient).setOnClickListener {
@@ -1062,7 +1563,7 @@ jobs:
                           checkFullScreenIntentPermission()
                           startKeepAliveService("CLIENT")
                           cardSetupPanel.visibility = View.GONE
-                          tvConnectionStatus.text = "● S25 Ultra (Uzak Kontrolcü) Aktif"
+                          updateConnectionBanner(HotspotLanBridge.isConnected)
                       }
 
                       findViewById<Button>(R.id.btnMakeCall).setOnClickListener {
@@ -1074,6 +1575,7 @@ jobs:
 
                           val currentMode = prefs.getString("saved_mode", "CLIENT")
                           if (currentMode == "HOST" && !HotspotLanBridge.isConnected) {
+                              // Bağımsız Telefon Modu: S25 Ultra bağlı değilse doğrudan Note 10 Lite üzerinde ara
                               HostInCallService.placeSystemCall(this, targetNumber)
                               val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
                                   putExtra("CALLER_NUMBER", targetNumber)
@@ -1120,22 +1622,47 @@ jobs:
                       return item.name + NL + item.number
                   }
 
-                  private fun showContactsDialog() {
+                  private fun formatCallLogRow(item: CallLogItem): String {
+                      return "${item.name} (${item.type})" + NL + "${item.number} • ${item.timeText}"
+                  }
+
+                  // Hem Rehberi hem de Son Aramaları (Gelen/Giden/Cevapsız) gösteren sekmeli pencere
+                  private fun showContactsAndLogsDialog() {
                       if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
                           != PackageManager.PERMISSION_GRANTED
                       ) {
                           permissionLauncher.launch(
                               arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.READ_CALL_LOG)
                           )
-                          Toast.makeText(this, "İzin verdikten sonra tekrar dokunun", Toast.LENGTH_SHORT).show()
+                          Toast.makeText(this, "Rehber izni verdikten sonra tekrar dokunun", Toast.LENGTH_SHORT).show()
                           return
                       }
 
                       val allContacts = ContactHelper.getAllContacts(this)
+                      val recentCalls = ContactHelper.getRecentCalls(this)
+                      var showingRecentCalls = false
+
                       val container = LinearLayout(this).apply {
                           orientation = LinearLayout.VERTICAL
-                          setPadding(36, 24, 36, 12)
+                          setPadding(36, 20, 36, 12)
                       }
+
+                      val tabRow = LinearLayout(this).apply {
+                          orientation = LinearLayout.HORIZONTAL
+                      }
+
+                      val btnTabContacts = Button(this).apply {
+                          text = "👥 Rehber (${allContacts.size})"
+                          layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      }
+
+                      val btnTabRecents = Button(this).apply {
+                          text = "🕒 Son Aramalar (${recentCalls.size})"
+                          layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      }
+
+                      tabRow.addView(btnTabContacts)
+                      tabRow.addView(btnTabRecents)
 
                       val searchInput = EditText(this).apply {
                           hint = "Kişi veya numara ara..."
@@ -1143,19 +1670,56 @@ jobs:
                       }
 
                       val listView = ListView(this)
-                      val displayedContacts = allContacts.toMutableList()
+                      val displayedNumbers = mutableListOf< Pair<String, String> >()
                       val adapter = ArrayAdapter(
                           this,
                           android.R.layout.simple_list_item_1,
-                          displayedContacts.map { formatContactRow(it) }.toMutableList()
+                          mutableListOf<String>()
                       )
                       listView.adapter = adapter
 
+                      fun refreshList(query: String) {
+                          val q = query.trim().lowercase()
+                          displayedNumbers.clear()
+                          adapter.clear()
+                          if (!showingRecentCalls) {
+                              val filtered = if (q.isEmpty()) allContacts else allContacts.filter {
+                                  it.name.lowercase().contains(q) || it.number.contains(q)
+                              }
+                              for (c in filtered) {
+                                  displayedNumbers.add(Pair(c.name, c.number))
+                                  adapter.add(formatContactRow(c))
+                              }
+                          } else {
+                              val filtered = if (q.isEmpty()) recentCalls else recentCalls.filter {
+                                  it.name.lowercase().contains(q) || it.number.contains(q)
+                              }
+                              for (r in filtered) {
+                                  displayedNumbers.add(Pair(r.name, r.number))
+                                  adapter.add(formatCallLogRow(r))
+                              }
+                          }
+                          adapter.notifyDataSetChanged()
+                      }
+
+                      btnTabContacts.setOnClickListener {
+                          showingRecentCalls = false
+                          refreshList(searchInput.text?.toString() ?: "")
+                      }
+
+                      btnTabRecents.setOnClickListener {
+                          showingRecentCalls = true
+                          refreshList(searchInput.text?.toString() ?: "")
+                      }
+
+                      refreshList("")
+
+                      container.addView(tabRow)
                       container.addView(searchInput)
                       container.addView(listView)
 
                       val dialog = AlertDialog.Builder(this)
-                          .setTitle("Kişiler ve Son Aramalar")
+                          .setTitle("Rehber & Son Aramalar")
                           .setView(container)
                           .setNegativeButton("Kapat", null)
                           .create()
@@ -1163,29 +1727,16 @@ jobs:
                       searchInput.addTextChangedListener(object : TextWatcher {
                           override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                           override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                              val q = s?.toString()?.trim()?.lowercase() ?: ""
-                              displayedContacts.clear()
-                              if (q.isEmpty()) {
-                                  displayedContacts.addAll(allContacts)
-                              } else {
-                                  displayedContacts.addAll(
-                                      allContacts.filter {
-                                          it.name.lowercase().contains(q) || it.number.contains(q)
-                                      }
-                                  )
-                              }
-                              adapter.clear()
-                              adapter.addAll(displayedContacts.map { formatContactRow(it) })
-                              adapter.notifyDataSetChanged()
+                              refreshList(s?.toString() ?: "")
                           }
                           override fun afterTextChanged(s: Editable?) {}
                       })
 
                       listView.setOnItemClickListener { _, _, position, _ ->
-                          val selected = displayedContacts.getOrNull(position)
+                          val selected = displayedNumbers.getOrNull(position)
                           if (selected != null) {
-                              etDialNumber.setText(selected.number)
-                              Toast.makeText(this@MainActivity, "${selected.name} seçildi", Toast.LENGTH_SHORT).show()
+                              etDialNumber.setText(selected.second)
+                              Toast.makeText(this@MainActivity, "${selected.first} seçildi", Toast.LENGTH_SHORT).show()
                               dialog.dismiss()
                           }
                       }
@@ -1193,21 +1744,30 @@ jobs:
                       dialog.show()
                   }
 
-                  override fun onEvent(event: String, data: String) {
-                      if (event == "TELEMETRY") {
-                          runOnUiThread {
-                              val current = tvConnectionStatus.text.toString().substringBefore(" | ")
-                              tvConnectionStatus.text = "$current | $data"
+                  private fun updateConnectionBanner(connected: Boolean) {
+                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      val mode = prefs.getString("saved_mode", "NONE")
+                      if (connected) {
+                          val suffix = if (lastTelemetryText.isNotEmpty()) " | $lastTelemetryText" else ""
+                          tvConnectionStatus.text = "● Bağlı (Ortak Wi-Fi / Hotspot)$suffix"
+                      } else {
+                          tvConnectionStatus.text = if (mode == "HOST") {
+                              "● Bağımsız Telefon Modu (S25 Ultra Bekleniyor)"
+                          } else {
+                              "● Bağlantı Bekleniyor..."
                           }
                       }
                   }
 
-                  override fun onConnectionChanged(connected: Boolean) {
-                      tvConnectionStatus.text = if (connected) {
-                          "● Cihazlar Bağlı (Ortak Wi-Fi / Hotspot)"
-                      } else {
-                          "● Bağlantı Bekleniyor..."
+                  override fun onEvent(event: String, data: String) {
+                      if (event == "TELEMETRY") {
+                          lastTelemetryText = data
+                          updateConnectionBanner(HotspotLanBridge.isConnected)
                       }
+                  }
+
+                  override fun onConnectionChanged(connected: Boolean) {
+                      updateConnectionBanner(connected)
                   }
 
                   private fun setupGoogleDialpad(etDialNumber: EditText) {
@@ -1297,7 +1857,7 @@ jobs:
                       if (roleManager.isRoleAvailable(RoleManager.ROLE_DIALER) &&
                           !roleManager.isRoleHeld(RoleManager.ROLE_DIALER)
                       ) {
-                        roleLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER))
+                          roleLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER))
                       }
                   }
 
@@ -1408,7 +1968,7 @@ jobs:
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
                                   android:layout_marginTop="4dp"
-                                  android:text="Hotspot veya Ortak Wi-Fi ağında otomatik çalışır."
+                                  android:text="Hotspot veya Ortak Wi-Fi ağında otomatik keşif ile çalışır."
                                   android:textColor="#9AA0A6"
                                   android:textSize="12sp" />
 
@@ -1895,5 +2455,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v4.1.0-APK
+          name: RemotePhone-v4.2.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
