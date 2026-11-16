@@ -73,8 +73,8 @@ jobs:
                       applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 21
-                      versionName = "4.2.0"
+                      versionCode = 23
+                      versionName = "4.4.0"
                   }
 
                   buildTypes {
@@ -134,6 +134,7 @@ jobs:
 
                   <uses-permission android:name="android.permission.INTERNET" />
                   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+                  <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
                   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
                   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
@@ -156,6 +157,7 @@ jobs:
                       <activity
                           android:name=".MainActivity"
                           android:exported="true"
+                          android:launchMode="singleTop"
                           android:windowSoftInputMode="stateAlwaysHidden">
                           <intent-filter>
                               <action android:name="android.intent.action.MAIN" />
@@ -356,6 +358,14 @@ jobs:
                       return list
                   }
 
+                  fun prependLocalMissedCallLog(rawNumber: String, name: String?, timeStr: String) {
+                      val displayName = if (!name.isNullOrBlank()) name else rawNumber
+                      val newItem = CallLogItem(displayName, rawNumber, "✖ Cevapsız", timeStr)
+                      val updated = mutableListOf(newItem)
+                      updated.addAll(syncedHostCallLogs.take(39))
+                      syncedHostCallLogs = updated
+                  }
+
                   fun serializeContacts(context: Context): String {
                       return getAllContacts(context).take(500).joinToString(";") { item ->
                           val safeName = item.name.replace(";", " ").replace("~", " ").replace("|", " ")
@@ -403,7 +413,7 @@ jobs:
                   }
 
                   fun resolveCallerInfo(context: Context, payload: String): Pair<String, String?> {
-                      val parts = payload.split("~", limit = 2)
+                      val parts = payload.split("~", limit = 3)
                       val rawNumber = parts[0].ifBlank { "Bilinmeyen Numara" }
                       val hostName = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
                       val localName = getContactName(context, rawNumber)
@@ -412,13 +422,18 @@ jobs:
               }
           """)
 
-          # HotspotLanBridge.kt: Hem Hotspot Gateway hem de Ortak Wi-Fi Ağı İçin UDP Otomatik IP Keşfi (Port 8990) + TCP Köprüsü (Port 8989)
+          # HotspotLanBridge.kt:
+          # Note 10 Lite'ta MOBİL VERİ KAPALI OLSA BİLE (İnternetsiz Hotspot / İnternetsiz Ortak Wi-Fi)
+          # TRANSPORT_WIFI ağını doğrudan bulup soketleri o ağa bağlayan (bindSocket) %100 kararlı LAN motoru.
           write_file("app/src/main/java/com/example/remotephone/HotspotLanBridge.kt", r"""
               package com.example.remotephone
 
               import android.content.Context
               import android.net.ConnectivityManager
               import android.net.LinkProperties
+              import android.net.Network
+              import android.net.NetworkCapabilities
+              import android.net.wifi.WifiManager
               import kotlinx.coroutines.*
               import java.io.BufferedReader
               import java.io.InputStreamReader
@@ -436,7 +451,7 @@ jobs:
               object HotspotLanBridge {
                   private const val TCP_PORT = 8989
                   private const val UDP_DISCOVERY_PORT = 8990
-                  private const val SOCKET_TIMEOUT_MS = 18_000
+                  private const val SOCKET_TIMEOUT_MS = 16_000
                   private const val HEARTBEAT_INTERVAL_MS = 8_000L
 
                   interface Listener {
@@ -472,7 +487,6 @@ jobs:
 
                   fun startHostServer() {
                       stop()
-                      // 1. Ortak Wi-Fi ağında S25 Ultra'nın Note 10 Lite IP'sini anında bulması için UDP Keşif Yanıtlayıcısı
                       discoveryJob = scope.launch {
                           while (isActive) {
                               try {
@@ -499,7 +513,6 @@ jobs:
                           }
                       }
 
-                      // 2. Ana TCP Kontrol Sunucusu
                       activeJob = scope.launch {
                           while (isActive) {
                               try {
@@ -533,12 +546,11 @@ jobs:
                                   }
                               }
                               delay(backoffDelay)
-                              if (backoffDelay < 8_000L) backoffDelay += 1000L
+                              if (backoffDelay < 7_000L) backoffDelay += 1000L
                           }
                       }
                   }
 
-                  // S25 Ultra ekranı açıldığında veya ağ değiştiğinde bağlantıyı milisaniyeler içinde tazeleyen tetikleyici
                   fun triggerScreenWakeRefresh(context: Context) {
                       val appCtx = context.applicationContext
                       scope.launch {
@@ -560,23 +572,35 @@ jobs:
                       }
                   }
 
-                  // Hem Hotspot Gateway IP'sini hem de Ortak Wi-Fi Ağındaki Note 10 Lite IP'sini bularak bağlanır
-                  private fun tryConnectToHost(context: Context): Socket? {
-                      val candidates = linkedSetOf<String>()
-                      discoveredHostIp?.let { candidates.add(it) }
-                      getActiveGatewayIp(context)?.let { candidates.add(it) }
-                      candidates.add("192.168.43.1")
+                  // İNTERNETSİZ HOTSPOT / WI-FI AĞINI BULAN ÖZEL METOT:
+                  // Mobil veri kapalıyken cm.activeNetwork null dönebileceği için doğrudan TRANSPORT_WIFI ağını bulur!
+                  fun findActiveWifiNetwork(context: Context): Network? {
+                      val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                      for (net in cm.allNetworks) {
+                          val caps = cm.getNetworkCapabilities(net) ?: continue
+                          if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                              return net
+                          }
+                      }
+                      return cm.activeNetwork
+                  }
 
-                      // Ortak Wi-Fi ağı için hızlı UDP Broadcast taraması (Note 10 Lite'ın yerel IP'sini bulur)
-                      discoverHostViaUdpBroadcast()?.let { foundIp ->
+                  private fun tryConnectToHost(context: Context): Socket? {
+                      val wifiNetwork = findActiveWifiNetwork(context)
+                      val candidates = collectAllCandidateHostIps(context, wifiNetwork)
+
+                      // Ortak Wi-Fi ağı için UDP Broadcast taraması (soketi doğrudan Wi-Fi ağına bağlayarak)
+                      discoverHostViaUdpBroadcast(wifiNetwork)?.let { foundIp ->
                           discoveredHostIp = foundIp
-                          candidates.add(foundIp)
+                          candidates.add(0, foundIp)
                       }
 
-                      for (ip in candidates) {
+                      for (ip in candidates.distinct()) {
                           try {
                               val s = Socket()
-                              s.connect(InetSocketAddress(ip, TCP_PORT), 1800)
+                              // Kritik: Mobil veri kapalıyken Android'in paketi düşürmemesi için soketi doğrudan Wi-Fi ağına bağla!
+                              try { wifiNetwork?.bindSocket(s) } catch (_: Exception) {}
+                              s.connect(InetSocketAddress(ip, TCP_PORT), 1600)
                               discoveredHostIp = ip
                               return s
                           } catch (_: Exception) {}
@@ -584,13 +608,80 @@ jobs:
                       return null
                   }
 
-                  private fun discoverHostViaUdpBroadcast(): String? {
+                  // Mobil veri kapalı olsa bile Hotspot veya Ortak Wi-Fi üzerindeki olası tüm Gateway/Host IP'lerini toplar
+                  private fun collectAllCandidateHostIps(context: Context, wifiNetwork: Network?): MutableList<String> {
+                      val list = mutableListOf<String>()
+                      discoveredHostIp?.let { if (it.isNotBlank()) list.add(it) }
+
+                      val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+                      // 1. TRANSPORT_WIFI ağının LinkProperties içindeki Gateway ve DHCP Sunucu adresleri
+                      if (wifiNetwork != null) {
+                          val linkProps: LinkProperties? = cm.getLinkProperties(wifiNetwork)
+                          if (linkProps != null) {
+                              for (route in linkProps.routes) {
+                                  val gw = route.gateway?.hostAddress
+                                  if (!gw.isNullOrEmpty() && gw != "0.0.0.0" && !gw.contains(":")) {
+                                      list.add(gw)
+                                  }
+                              }
+                              for (linkAddr in linkProps.linkAddresses) {
+                                  val addr = linkAddr.address
+                                  if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                                      val hostAddr = addr.hostAddress ?: ""
+                                      val prefix = hostAddr.substringBeforeLast(".", "")
+                                      if (prefix.isNotEmpty()) {
+                                          // S25 Ultra örn. 192.168.43.105 aldıysa Note 10 Lite %99 192.168.43.1 adresindedir
+                                          list.add("$prefix.1")
+                                      }
+                                  }
+                              }
+                          }
+                      }
+
+                      // 2. WifiManager.dhcpInfo üzerinden Gateway IP (İnternet olmasa bile DHCP her zaman çalışır)
+                      try {
+                          val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                          @Suppress("DEPRECATION")
+                          val dhcp = wm.dhcpInfo
+                          if (dhcp != null && dhcp.gateway != 0) {
+                              val g = dhcp.gateway
+                              val dhcpGw = "${g and 0xFF}.${(g shr 8) and 0xFF}.${(g shr 16) and 0xFF}.${(g shr 24) and 0xFF}"
+                              if (dhcpGw != "0.0.0.0") list.add(dhcpGw)
+                          }
+                      } catch (_: Exception) {}
+
+                      // 3. Ağ arayüzlerinden (wlan0) alt ağın .1 adresini çıkar
+                      try {
+                          val interfaces = NetworkInterface.getNetworkInterfaces()
+                          while (interfaces.hasMoreElements()) {
+                              val intf = interfaces.nextElement()
+                              if (!intf.isUp || intf.isLoopback) continue
+                              for (ia in intf.interfaceAddresses) {
+                                  val addr = ia.address
+                                  if (addr is Inet4Address) {
+                                      val prefix = (addr.hostAddress ?: "").substringBeforeLast(".", "")
+                                      if (prefix.isNotEmpty()) list.add("$prefix.1")
+                                  }
+                              }
+                          }
+                      } catch (_: Exception) {}
+
+                      // 4. Standart Samsung / Android Hotspot varsayılan IP'leri
+                      list.add("192.168.43.1")
+                      list.add("192.168.137.1")
+                      return list
+                  }
+
+                  private fun discoverHostViaUdpBroadcast(wifiNetwork: Network?): String? {
                       var tempSocket: DatagramSocket? = null
                       try {
                           tempSocket = DatagramSocket().apply {
                               broadcast = true
-                              soTimeout = 700
+                              soTimeout = 650
                           }
+                          try { wifiNetwork?.bindSocket(tempSocket) } catch (_: Exception) {}
+
                           val req = "DISCOVER_REMOTEPHONE_HOST".toByteArray()
                           val broadcastTargets = mutableSetOf("255.255.255.255")
 
@@ -689,8 +780,19 @@ jobs:
                   fun send(event: String, data: String = "") {
                       scope.launch {
                           try {
-                              writer?.println("$event|$data")
-                          } catch (_: Exception) {}
+                              val w = writer
+                              if (w == null) {
+                                  notifyConnection(false)
+                                  return@launch
+                              }
+                              w.println("$event|$data")
+                              if (w.checkError()) {
+                                  try { currentSocket?.close() } catch (_: Exception) {}
+                                  notifyConnection(false)
+                              }
+                          } catch (_: Exception) {
+                              notifyConnection(false)
+                          }
                       }
                   }
 
@@ -706,23 +808,12 @@ jobs:
                           for (listener in listeners) listener.onConnectionChanged(connected)
                       }
                   }
-
-                  private fun getActiveGatewayIp(context: Context): String? {
-                      val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                      val network = cm.activeNetwork ?: return "192.168.43.1"
-                      val linkProps: LinkProperties = cm.getLinkProperties(network) ?: return "192.168.43.1"
-                      for (route in linkProps.routes) {
-                          if (route.isDefaultRoute && route.gateway != null) {
-                              val ip = route.gateway?.hostAddress
-                              if (!ip.isNullOrEmpty() && ip != "0.0.0.0") return ip
-                          }
-                      }
-                      return "192.168.43.1"
-                  }
               }
           """)
 
-          # BridgeKeepAliveService.kt: Eksik Olan Ön Plan Servisi + Ekran Açılma (ACTION_SCREEN_ON) ve Ağ Değişimi Dinleyicisi
+          # BridgeKeepAliveService.kt:
+          # İnternet Şartı Olmayan (`removeCapability(NET_CAPABILITY_INTERNET)`) Özel Wi-Fi Ağ İzleyicisi
+          # Böylece Note 10 Lite mobil verisi kapalıyken bile S25 Ultra Wi-Fi/Hotspot bağlantısını anında algılar ve korur!
           write_file("app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt", r"""
               package com.example.remotephone
 
@@ -738,33 +829,54 @@ jobs:
               import android.content.Intent
               import android.content.IntentFilter
               import android.content.pm.ServiceInfo
+              import android.media.Ringtone
+              import android.media.RingtoneManager
               import android.net.ConnectivityManager
               import android.net.Network
+              import android.net.NetworkCapabilities
+              import android.net.NetworkRequest
               import android.net.wifi.WifiManager
               import android.os.BatteryManager
               import android.os.Build
               import android.os.IBinder
               import android.os.PowerManager
+              import android.os.VibrationEffect
+              import android.os.Vibrator
               import androidx.core.app.NotificationCompat
               import androidx.core.app.ServiceCompat
+              import java.util.concurrent.CopyOnWriteArrayList
 
               class BridgeKeepAliveService : Service(), HotspotLanBridge.Listener {
 
                   companion object {
                       private const val CHANNEL_ID = "RemotePhoneKeepAliveChannel"
                       private const val CALL_CHANNEL_ID = "IncomingRemoteCallChannel"
+                      private const val MISSED_CALL_CHANNEL_ID = "MissedRemoteCallChannel"
+                      private const val MISSED_CALL_GROUP = "GROUP_MISSED_REMOTE_CALLS"
                       private const val NOTIFICATION_ID = 1001
                       const val CALL_NOTIFICATION_ID = 2002
+
+                      var instance: BridgeKeepAliveService? = null
+                      val pendingOfflineMissedCalls = CopyOnWriteArrayList<String>()
+
+                      fun stopIncomingRinging() {
+                          instance?.stopRingerAndVibration()
+                      }
                   }
 
                   private var wakeLock: PowerManager.WakeLock? = null
                   private var wifiLock: WifiManager.WifiLock? = null
+                  private var multicastLock: WifiManager.MulticastLock? = null
                   private var networkCallback: ConnectivityManager.NetworkCallback? = null
+                  private var activeRingtone: Ringtone? = null
+                  private var vibrator: Vibrator? = null
 
                   private val screenWakeReceiver = object : BroadcastReceiver() {
                       override fun onReceive(context: Context?, intent: Intent?) {
                           when (intent?.action) {
-                              Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                              Intent.ACTION_SCREEN_ON,
+                              Intent.ACTION_USER_PRESENT,
+                              WifiManager.NETWORK_STATE_CHANGED_ACTION -> {
                                   HotspotLanBridge.triggerScreenWakeRefresh(this@BridgeKeepAliveService)
                               }
                           }
@@ -773,6 +885,8 @@ jobs:
 
                   override fun onCreate() {
                       super.onCreate()
+                      instance = this
+                      vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
                       createNotificationChannels()
                       acquireHardwareLocks()
                       HotspotLanBridge.addListener(this)
@@ -780,21 +894,32 @@ jobs:
                       val filter = IntentFilter().apply {
                           addAction(Intent.ACTION_SCREEN_ON)
                           addAction(Intent.ACTION_USER_PRESENT)
+                          addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION)
                       }
                       registerReceiver(screenWakeReceiver, filter)
-                      registerNetworkChangeWatcher()
+                      registerInternetlessWifiWatcher()
                   }
 
-                  private fun registerNetworkChangeWatcher() {
+                  // KRİTİK: registerDefaultNetworkCallback yerine İNTERNET ŞARTI ARAMAYAN (removeCapability) Wi-Fi izleyicisi!
+                  // Note 10 Lite'ta mobil veri kapalı olsa bile Hotspot bağlandığı milisaniyede tetiklenir.
+                  private fun registerInternetlessWifiWatcher() {
                       try {
                           val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                          val req = NetworkRequest.Builder()
+                              .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                              .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                              .build()
+
                           val cb = object : ConnectivityManager.NetworkCallback() {
                               override fun onAvailable(network: Network) {
                                   HotspotLanBridge.triggerScreenWakeRefresh(this@BridgeKeepAliveService)
                               }
+                              override fun onLost(network: Network) {
+                                  HotspotLanBridge.triggerScreenWakeRefresh(this@BridgeKeepAliveService)
+                              }
                           }
                           networkCallback = cb
-                          cm.registerDefaultNetworkCallback(cb)
+                          cm.registerNetworkCallback(req, cb)
                       } catch (_: Exception) {}
                   }
 
@@ -844,6 +969,17 @@ jobs:
                               HotspotLanBridge.send("REQ_CONTACTS")
                           } else if (mode == "HOST") {
                               sendHostTelemetry()
+                              flushPendingOfflineMissedCalls()
+                          }
+                      }
+                  }
+
+                  private fun flushPendingOfflineMissedCalls() {
+                      if (pendingOfflineMissedCalls.isNotEmpty() && HotspotLanBridge.isConnected) {
+                          val copy = pendingOfflineMissedCalls.toList()
+                          pendingOfflineMissedCalls.clear()
+                          for (missedPayload in copy) {
+                              HotspotLanBridge.send("MISSED", missedPayload)
                           }
                       }
                   }
@@ -859,6 +995,29 @@ jobs:
                       } catch (_: Exception) {}
                   }
 
+                  fun startRingerAndVibration() {
+                      stopRingerAndVibration()
+                      try {
+                          val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                          activeRingtone = RingtoneManager.getRingtone(applicationContext, uri)?.apply { play() }
+                      } catch (_: Exception) {}
+                      try {
+                          val pattern = longArrayOf(0, 1000, 1000)
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
+                          } else {
+                              @Suppress("DEPRECATION")
+                              vibrator?.vibrate(pattern, 0)
+                          }
+                      } catch (_: Exception) {}
+                  }
+
+                  fun stopRingerAndVibration() {
+                      try { activeRingtone?.stop() } catch (_: Exception) {}
+                      activeRingtone = null
+                      try { vibrator?.cancel() } catch (_: Exception) {}
+                  }
+
                   @SuppressLint("MissingPermission")
                   override fun onEvent(event: String, data: String) {
                       val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
@@ -867,15 +1026,28 @@ jobs:
                       when (event) {
                           "INCOMING" -> {
                               if (mode == "CLIENT") {
+                                  HotspotLanBridge.send("INCOMING_ACK")
+                                  startRingerAndVibration()
                                   showIncomingCallNotification(data, isLocalHostFallback = false)
                               }
                           }
+                          "CONNECTED" -> {
+                              stopRingerAndVibration()
+                          }
                           "ENDED" -> {
+                              stopRingerAndVibration()
                               val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                               nm.cancel(CALL_NOTIFICATION_ID)
                           }
+                          "MISSED" -> {
+                              stopRingerAndVibration()
+                              val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                              nm.cancel(CALL_NOTIFICATION_ID)
+                              if (mode == "CLIENT") {
+                                  showMissedCallNotificationOnClient(data)
+                              }
+                          }
                           "DIAL" -> {
-                              // Note 10 Lite'ta henüz aktif çağrı yokken S25 Ultra'dan arama emri gelirse doğrudan başlat
                               if (mode == "HOST" && HostInCallService.instance == null && data.isNotEmpty()) {
                                   HostInCallService.placeSystemCall(this, data)
                               }
@@ -891,6 +1063,7 @@ jobs:
                                       HotspotLanBridge.send("RES_CALLLOGS", logsPayload)
                                   }
                                   sendHostTelemetry()
+                                  flushPendingOfflineMissedCalls()
                               }
                           }
                           "RES_CONTACTS" -> {
@@ -936,6 +1109,65 @@ jobs:
                       } catch (_: Exception) {}
                   }
 
+                  private fun showMissedCallNotificationOnClient(missedPayload: String) {
+                      val parts = missedPayload.split("~", limit = 3)
+                      val rawNumber = parts.getOrNull(0)?.ifBlank { "Bilinmeyen Numara" } ?: "Bilinmeyen Numara"
+                      val hostName = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
+                      val timeStr = parts.getOrNull(2)?.takeIf { it.isNotBlank() } ?: ""
+
+                      val localName = ContactHelper.getContactName(this, rawNumber)
+                      val finalName = localName ?: hostName
+                      val title = if (!finalName.isNullOrBlank()) "Cevapsız Arama: $finalName" else "Cevapsız Arama: $rawNumber"
+                      val body = if (!finalName.isNullOrBlank()) {
+                          "$rawNumber • Saat: $timeStr"
+                      } else {
+                          "Numara: $rawNumber • Saat: $timeStr"
+                      }
+
+                      ContactHelper.prependLocalMissedCallLog(rawNumber, finalName, timeStr)
+
+                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      val uniqueNotifId = (System.currentTimeMillis() and 0xFFFFFFF).toInt()
+
+                      val openDialerIntent = Intent(this, MainActivity::class.java).apply {
+                          flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                          putExtra("PREFILL_NUMBER", rawNumber)
+                      }
+                      val contentPendingIntent = PendingIntent.getActivity(
+                          this,
+                          uniqueNotifId,
+                          openDialerIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+
+                      val callBackIntent = Intent(this, MainActivity::class.java).apply {
+                          flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                          putExtra("PREFILL_NUMBER", rawNumber)
+                          putExtra("AUTO_CALL_FROM_NOTIFICATION", true)
+                      }
+                      val callBackPendingIntent = PendingIntent.getActivity(
+                          this,
+                          uniqueNotifId + 1,
+                          callBackIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+
+                      val missedNotification = NotificationCompat.Builder(this, MISSED_CALL_CHANNEL_ID)
+                          .setSmallIcon(android.R.drawable.sym_call_missed)
+                          .setContentTitle(title)
+                          .setContentText(body)
+                          .setStyle(NotificationCompat.BigTextStyle().bigText("$body\nNumarayı geri aramak için dokunun."))
+                          .setPriority(NotificationCompat.PRIORITY_HIGH)
+                          .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+                          .setContentIntent(contentPendingIntent)
+                          .setAutoCancel(true)
+                          .setGroup(MISSED_CALL_GROUP)
+                          .addAction(android.R.drawable.sym_action_call, "Geri Ara", callBackPendingIntent)
+                          .build()
+
+                      nm.notify(uniqueNotifId, missedNotification)
+                  }
+
                   private fun acquireHardwareLocks() {
                       val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                       wakeLock = powerManager.newWakeLock(
@@ -957,9 +1189,18 @@ jobs:
                           setReferenceCounted(false)
                           acquire()
                       }
+
+                      // İnternetsiz Hotspot / Wi-Fi ağlarında UDP Broadcast keşfinin engellenmemesi için MulticastLock
+                      try {
+                          multicastLock = wifiManager.createMulticastLock("RemotePhone::MulticastLock").apply {
+                              setReferenceCounted(false)
+                              acquire()
+                          }
+                      } catch (_: Exception) {}
                   }
 
                   override fun onDestroy() {
+                      stopRingerAndVibration()
                       HotspotLanBridge.removeListener(this)
                       try { unregisterReceiver(screenWakeReceiver) } catch (_: Exception) {}
                       try {
@@ -969,7 +1210,9 @@ jobs:
                       try {
                           if (wakeLock?.isHeld == true) wakeLock?.release()
                           if (wifiLock?.isHeld == true) wifiLock?.release()
+                          if (multicastLock?.isHeld == true) multicastLock?.release()
                       } catch (_: Exception) {}
+                      instance = null
                       super.onDestroy()
                   }
 
@@ -994,12 +1237,21 @@ jobs:
                                   lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                               }
                           )
+                          nm.createNotificationChannel(
+                              NotificationChannel(
+                                  MISSED_CALL_CHANNEL_ID,
+                                  "Cevapsız Çağrı Bildirimleri",
+                                  NotificationManager.IMPORTANCE_HIGH
+                              ).apply {
+                                  description = "Cevaplanmayan çağrıları bildirim kutusunda gösterir"
+                                  lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                              }
+                          )
                       }
                   }
               }
           """)
 
-          # HostInCallService.kt: Eksik Olan Yerel Yedekleme Metotları (answerLocalCall, hangupAllCalls vb.) + 8 Saniye Çift Ekran Yedeklemesi
           write_file("app/src/main/java/com/example/remotephone/HostInCallService.kt", r"""
               package com.example.remotephone
 
@@ -1019,6 +1271,9 @@ jobs:
               import android.telecom.PhoneAccountHandle
               import android.telecom.TelecomManager
               import android.telecom.VideoProfile
+              import java.text.SimpleDateFormat
+              import java.util.Date
+              import java.util.Locale
 
               class HostInCallService : InCallService(), HotspotLanBridge.Listener {
 
@@ -1052,6 +1307,16 @@ jobs:
 
                   private val handler = Handler(Looper.getMainLooper())
                   private var activeCall: Call? = null
+
+                  @Volatile
+                  private var wasIncomingCall = false
+                  @Volatile
+                  private var wasCallAnswered = false
+                  @Volatile
+                  private var wasRejectedByUser = false
+                  @Volatile
+                  private var incomingAckReceived = false
+                  private var currentCallerPayload: String = ""
 
                   override fun onCreate() {
                       super.onCreate()
@@ -1101,12 +1366,17 @@ jobs:
                   @SuppressLint("MissingPermission")
                   override fun onEvent(event: String, data: String) {
                       when (event) {
+                          "INCOMING_ACK" -> {
+                              incomingAckReceived = true
+                          }
                           "ANSWER" -> {
+                              wasCallAnswered = true
                               val ringing = calls.firstOrNull { it.state == Call.STATE_RINGING } ?: activeCall
                               ringing?.answer(VideoProfile.STATE_AUDIO_ONLY)
                               routeAudioToBluetoothOrEarpiece()
                           }
                           "REJECT", "HANGUP" -> {
+                              wasRejectedByUser = true
                               hangupAllCalls()
                           }
                           "DIAL" -> {
@@ -1135,6 +1405,13 @@ jobs:
                       super.onCallAdded(call)
                       activeCall = call
                       val number = call.details?.handle?.schemeSpecificPart ?: "Bilinmeyen Numara"
+                      val hostContactName = ContactHelper.getContactName(this, number) ?: ""
+                      currentCallerPayload = "$number~$hostContactName"
+
+                      wasIncomingCall = (call.state == Call.STATE_RINGING)
+                      wasCallAnswered = false
+                      wasRejectedByUser = false
+                      incomingAckReceived = false
 
                       call.registerCallback(object : Call.Callback() {
                           override fun onStateChanged(call: Call, state: Int) {
@@ -1143,11 +1420,12 @@ jobs:
                                       routeAudioToBluetoothOrEarpiece()
                                   }
                                   Call.STATE_ACTIVE -> {
+                                      wasCallAnswered = true
                                       routeAudioToBluetoothOrEarpiece()
                                       HotspotLanBridge.send("CONNECTED", number)
                                   }
                                   Call.STATE_DISCONNECTED -> {
-                                      HotspotLanBridge.send("ENDED")
+                                      handleCallDisconnected()
                                       activeCall = null
                                   }
                               }
@@ -1159,31 +1437,48 @@ jobs:
                       }
 
                       if (call.state == Call.STATE_RINGING) {
-                          val hostContactName = ContactHelper.getContactName(this, number) ?: ""
-                          val callerPayload = "$number~$hostContactName"
-
                           if (HotspotLanBridge.isConnected) {
-                              // S25 Ultra bağlıysa Note 10 Lite'ın zilini sustur ve S25 Ultra'yı uyandır
                               try {
                                   val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
                                   tm.silenceRinger()
                               } catch (_: Exception) {}
-                              HotspotLanBridge.send("INCOMING", callerPayload)
+                              HotspotLanBridge.send("INCOMING", currentCallerPayload)
 
-                              // 8 Saniye Yedekleme Kuralı: S25 Ultra uzaktaysa ve 8 saniyede açılmazsa Note 10 Lite ekranını da aç
                               handler.postDelayed({
-                                  if (call.state == Call.STATE_RINGING) {
-                                      launchLocalFallbackScreen(callerPayload)
+                                  if (call.state == Call.STATE_RINGING && !incomingAckReceived && !HotspotLanBridge.isConnected) {
+                                      launchLocalFallbackScreen(currentCallerPayload)
                                   }
-                              }, 8_000L)
+                              }, 1_500L)
                           } else {
-                              // Bağımsız mod: S25 Ultra bağlı değilse doğrudan Note 10 Lite ekranını aç
-                              launchLocalFallbackScreen(callerPayload)
+                              launchLocalFallbackScreen(currentCallerPayload)
                           }
                       }
                   }
 
+                  private fun handleCallDisconnected() {
+                      if (wasIncomingCall && !wasCallAnswered && !wasRejectedByUser) {
+                          val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                          val missedData = "$currentCallerPayload~$timeStr"
+                          if (HotspotLanBridge.isConnected) {
+                              HotspotLanBridge.send("MISSED", missedData)
+                          } else {
+                              BridgeKeepAliveService.pendingOfflineMissedCalls.add(missedData)
+                          }
+                          handler.postDelayed({
+                              if (HotspotLanBridge.isConnected) {
+                                  val logsPayload = ContactHelper.serializeCallLogs(this@HostInCallService)
+                                  if (logsPayload.isNotEmpty()) {
+                                      HotspotLanBridge.send("RES_CALLLOGS", logsPayload)
+                                  }
+                              }
+                          }, 1_000L)
+                      } else {
+                          HotspotLanBridge.send("ENDED")
+                      }
+                  }
+
                   private fun launchLocalFallbackScreen(callerPayload: String) {
+                      BridgeKeepAliveService.instance?.startRingerAndVibration()
                       val intent = Intent(this, RemoteCallActivity::class.java).apply {
                           flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                           putExtra("CALLER_NUMBER", callerPayload)
@@ -1194,6 +1489,8 @@ jobs:
                   }
 
                   fun answerLocalCall() {
+                      wasCallAnswered = true
+                      BridgeKeepAliveService.stopIncomingRinging()
                       val ringing = calls.firstOrNull { it.state == Call.STATE_RINGING } ?: activeCall
                       ringing?.answer(VideoProfile.STATE_AUDIO_ONLY)
                       routeAudioToBluetoothOrEarpiece()
@@ -1213,6 +1510,8 @@ jobs:
                   }
 
                   fun hangupAllCalls() {
+                      wasRejectedByUser = true
+                      BridgeKeepAliveService.stopIncomingRinging()
                       handler.removeCallbacksAndMessages(null)
                       setMuted(false)
                       calls.forEach {
@@ -1234,8 +1533,6 @@ jobs:
               import android.graphics.Color
               import android.media.AudioFocusRequest
               import android.media.AudioManager
-              import android.media.Ringtone
-              import android.media.RingtoneManager
               import android.os.Build
               import android.os.Bundle
               import android.os.PowerManager
@@ -1250,7 +1547,6 @@ jobs:
 
               class RemoteCallActivity : AppCompatActivity(), HotspotLanBridge.Listener {
 
-                  private var ringtone: Ringtone? = null
                   private var proximityWakeLock: PowerManager.WakeLock? = null
                   private var audioFocusRequest: AudioFocusRequest? = null
                   private var isMuted = false
@@ -1307,8 +1603,6 @@ jobs:
                           layoutInCallControls.visibility = View.VISIBLE
                       } else {
                           updateStatusText("Gelen arama...")
-                          val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                          ringtone = RingtoneManager.getRingtone(applicationContext, ringtoneUri)?.apply { play() }
                       }
 
                       btnMute.setOnClickListener {
@@ -1334,7 +1628,7 @@ jobs:
                       }
 
                       btnAnswer.setOnClickListener {
-                          ringtone?.stop()
+                          BridgeKeepAliveService.stopIncomingRinging()
                           btnAnswer.isEnabled = false
                           requestAutoPauseMedia()
 
@@ -1349,7 +1643,7 @@ jobs:
                       }
 
                       btnReject.setOnClickListener {
-                          ringtone?.stop()
+                          BridgeKeepAliveService.stopIncomingRinging()
                           btnReject.isEnabled = false
                           btnAnswer.isEnabled = false
 
@@ -1397,12 +1691,12 @@ jobs:
                   override fun onEvent(event: String, data: String) {
                       when (event) {
                           "CONNECTED" -> switchToActiveCallUi()
-                          "ENDED" -> cleanupAndFinish()
+                          "ENDED", "MISSED" -> cleanupAndFinish()
                       }
                   }
 
                   private fun switchToActiveCallUi() {
-                      ringtone?.stop()
+                      BridgeKeepAliveService.stopIncomingRinging()
                       updateStatusText("Görüşme Aktif (Bluetooth)")
                       btnAnswer.visibility = View.GONE
                       spaceBetween.visibility = View.GONE
@@ -1425,7 +1719,7 @@ jobs:
                   }
 
                   private fun cleanupAndFinish() {
-                      ringtone?.stop()
+                      BridgeKeepAliveService.stopIncomingRinging()
                       chronometer.stop()
                       releaseAutoPauseMedia()
                       val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -1435,7 +1729,6 @@ jobs:
 
                   override fun onDestroy() {
                       HotspotLanBridge.removeListener(this)
-                      ringtone?.stop()
                       releaseAutoPauseMedia()
                       try {
                           if (proximityWakeLock?.isHeld == true) proximityWakeLock?.release()
@@ -1525,10 +1818,6 @@ jobs:
                       val btnToggleSettings = findViewById<Button>(R.id.btnToggleSettings)
                       etDialNumber = findViewById(R.id.etDialNumber)
 
-                      if (intent?.action == Intent.ACTION_DIAL || intent?.action == Intent.ACTION_VIEW) {
-                          intent?.data?.schemeSpecificPart?.let { etDialNumber.setText(it) }
-                      }
-
                       val savedMode = prefs.getString("saved_mode", "NONE") ?: "NONE"
                       if (savedMode != "NONE") {
                           cardSetupPanel.visibility = View.GONE
@@ -1572,10 +1861,39 @@ jobs:
                               Toast.makeText(this, "Lütfen numara çevirin veya rehberden seçin", Toast.LENGTH_SHORT).show()
                               return@setOnClickListener
                           }
+                          initiateCallAccordingToConnectionRule(targetNumber)
+                      }
 
-                          val currentMode = prefs.getString("saved_mode", "CLIENT")
-                          if (currentMode == "HOST" && !HotspotLanBridge.isConnected) {
-                              // Bağımsız Telefon Modu: S25 Ultra bağlı değilse doğrudan Note 10 Lite üzerinde ara
+                      handleIncomingIntent(intent)
+                  }
+
+                  override fun onNewIntent(intent: Intent) {
+                      super.onNewIntent(intent)
+                      setIntent(intent)
+                      handleIncomingIntent(intent)
+                  }
+
+                  private fun handleIncomingIntent(intent: Intent?) {
+                      if (intent == null) return
+                      if (intent.action == Intent.ACTION_DIAL || intent.action == Intent.ACTION_VIEW) {
+                          intent.data?.schemeSpecificPart?.let { etDialNumber.setText(it) }
+                      }
+                      val prefill = intent.getStringExtra("PREFILL_NUMBER")
+                      if (!prefill.isNullOrBlank()) {
+                          etDialNumber.setText(prefill)
+                          if (intent.getBooleanExtra("AUTO_CALL_FROM_NOTIFICATION", false)) {
+                              intent.removeExtra("AUTO_CALL_FROM_NOTIFICATION")
+                              initiateCallAccordingToConnectionRule(prefill)
+                          }
+                      }
+                  }
+
+                  private fun initiateCallAccordingToConnectionRule(targetNumber: String) {
+                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      val currentMode = prefs.getString("saved_mode", "CLIENT")
+
+                      if (currentMode == "HOST") {
+                          if (!HotspotLanBridge.isConnected) {
                               HostInCallService.placeSystemCall(this, targetNumber)
                               val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
                                   putExtra("CALLER_NUMBER", targetNumber)
@@ -1584,14 +1902,20 @@ jobs:
                               }
                               startActivity(callIntent)
                           } else {
-                              HotspotLanBridge.send("DIAL", targetNumber)
-                              val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
-                                  putExtra("CALLER_NUMBER", targetNumber)
-                                  putExtra("IS_OUTGOING", true)
-                                  putExtra("IS_LOCAL_FALLBACK", false)
-                              }
-                              startActivity(callIntent)
+                              Toast.makeText(
+                                  this,
+                                  "S25 Ultra bağlı! Görüşmeler S25 Ultra ve Bluetooth kulaklık üzerinden yürütülüyor.",
+                                  Toast.LENGTH_LONG
+                              ).show()
                           }
+                      } else {
+                          HotspotLanBridge.send("DIAL", targetNumber)
+                          val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
+                              putExtra("CALLER_NUMBER", targetNumber)
+                              putExtra("IS_OUTGOING", true)
+                              putExtra("IS_LOCAL_FALLBACK", false)
+                          }
+                          startActivity(callIntent)
                       }
                   }
 
@@ -1626,7 +1950,6 @@ jobs:
                       return "${item.name} (${item.type})" + NL + "${item.number} • ${item.timeText}"
                   }
 
-                  // Hem Rehberi hem de Son Aramaları (Gelen/Giden/Cevapsız) gösteren sekmeli pencere
                   private fun showContactsAndLogsDialog() {
                       if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
                           != PackageManager.PERMISSION_GRANTED
@@ -1670,7 +1993,7 @@ jobs:
                       }
 
                       val listView = ListView(this)
-                      val displayedNumbers = mutableListOf< Pair<String, String> >()
+                      val displayedNumbers = mutableListOf<Pair<String, String>>()
                       val adapter = ArrayAdapter(
                           this,
                           android.R.layout.simple_list_item_1,
@@ -1749,10 +2072,14 @@ jobs:
                       val mode = prefs.getString("saved_mode", "NONE")
                       if (connected) {
                           val suffix = if (lastTelemetryText.isNotEmpty()) " | $lastTelemetryText" else ""
-                          tvConnectionStatus.text = "● Bağlı (Ortak Wi-Fi / Hotspot)$suffix"
+                          tvConnectionStatus.text = if (mode == "HOST") {
+                              "● S25 Ultra Bağlı (Sessiz Köprü Modu)"
+                          } else {
+                              "● Bağlı$suffix"
+                          }
                       } else {
                           tvConnectionStatus.text = if (mode == "HOST") {
-                              "● Bağımsız Telefon Modu (S25 Ultra Bekleniyor)"
+                              "● Bağımsız Telefon Modu (S25 Ultra Bağlı Değil)"
                           } else {
                               "● Bağlantı Bekleniyor..."
                           }
@@ -1968,7 +2295,7 @@ jobs:
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
                                   android:layout_marginTop="4dp"
-                                  android:text="Hotspot veya Ortak Wi-Fi ağında otomatik keşif ile çalışır."
+                                  android:text="Mobil veri kapalı olsa bile Hotspot veya Ortak Wi-Fi üzerinden kesintisiz çalışır."
                                   android:textColor="#9AA0A6"
                                   android:textSize="12sp" />
 
@@ -2455,5 +2782,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v4.2.0-APK
+          name: RemotePhone-v4.4.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
