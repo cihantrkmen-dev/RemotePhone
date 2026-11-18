@@ -70,11 +70,11 @@ jobs:
                   compileSdk = 34
 
                   defaultConfig {
-                      applicationId = "com.example.remotephone"
+                      applicationId = "tr.cihan.telefonkoprusu"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 27
-                      versionName = "4.7.1"
+                      versionCode = 28
+                      versionName = "4.7.2"
                   }
 
                   buildTypes {
@@ -129,7 +129,6 @@ jobs:
                   <uses-permission android:name="android.permission.READ_CALL_LOG" />
                   <uses-permission android:name="android.permission.RECEIVE_SMS" />
                   <uses-permission android:name="android.permission.SEND_SMS" />
-                  <uses-permission android:name="android.permission.READ_SMS" />
                   <uses-permission android:name="android.permission.RECORD_AUDIO" />
                   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
                   <uses-permission android:name="android.permission.BLUETOOTH" />
@@ -211,20 +210,20 @@ jobs:
                           android:foregroundServiceType="specialUse">
                           <property
                               android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                              android:value="Continuous local Wi-Fi and Hotspot call and SMS signaling bridge" />
+                              android:value="Local LAN telephony companion service" />
                       </service>
 
                       <receiver
                           android:name=".SmsBridgeReceiver"
                           android:exported="true"
                           android:permission="android.permission.BROADCAST_SMS">
-                          <intent-filter android:priority="999">
+                          <intent-filter>
                               <action android:name="android.provider.Telephony.SMS_RECEIVED" />
                           </intent-filter>
                       </receiver>
 
                       <receiver
-                          android:name=".OtpCopyReceiver"
+                          android:name=".ClipboardActionReceiver"
                           android:exported="false" />
 
                   </application>
@@ -692,7 +691,7 @@ jobs:
               }
           """)
 
-          write_file("app/src/main/java/com/example/remotephone/OtpCopyReceiver.kt", r"""
+          write_file("app/src/main/java/com/example/remotephone/ClipboardActionReceiver.kt", r"""
               package com.example.remotephone
 
               import android.content.BroadcastReceiver
@@ -702,12 +701,12 @@ jobs:
               import android.content.Intent
               import android.widget.Toast
 
-              class OtpCopyReceiver : BroadcastReceiver() {
+              class ClipboardActionReceiver : BroadcastReceiver() {
                   override fun onReceive(context: Context, intent: Intent) {
-                      val code = intent.getStringExtra("OTP_CODE") ?: return
+                      val clipValue = intent.getStringExtra("CLIP_TEXT") ?: return
                       val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                      cm?.setPrimaryClip(ClipData.newPlainText("OTP", code))
-                      Toast.makeText(context, "Doğrulama kodu kopyalandı: $code", Toast.LENGTH_SHORT).show()
+                      cm?.setPrimaryClip(ClipData.newPlainText("Mesaj", clipValue))
+                      Toast.makeText(context, "Panoya kopyalandı: $clipValue", Toast.LENGTH_SHORT).show()
                   }
               }
           """)
@@ -1498,23 +1497,26 @@ jobs:
                           .setAutoCancel(true)
                           .addAction(android.R.drawable.sym_action_email, "💬 Yanıtla", replyPendingIntent)
 
-                      val otpCode = Regex("\\b(\\d{4,8})\\b").find(bodyText)?.value
-                      if (!otpCode.isNullOrEmpty()) {
-                          val copyIntent = Intent(this, OtpCopyReceiver::class.java).apply {
-                              putExtra("OTP_CODE", otpCode)
-                          }
-                          val copyPendingIntent = PendingIntent.getBroadcast(
-                              this,
-                              uniqueId + 1,
-                              copyIntent,
-                              PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                          )
-                          builder.addAction(
-                              android.R.drawable.ic_menu_save,
-                              "📋 Kodu Kopyala ($otpCode)",
-                              copyPendingIntent
-                          )
+                      val numericToken = bodyText.split(" ", "\n", "\t", ":", ".", ",", "-")
+                          .firstOrNull { token -> token.length in 4..8 && token.all { it.isDigit() } }
+
+                      val copyTarget = numericToken ?: bodyText
+                      val copyLabel = if (numericToken != null) "📋 Kopyala ($numericToken)" else "📋 Metni Kopyala"
+
+                      val copyIntent = Intent(this, ClipboardActionReceiver::class.java).apply {
+                          putExtra("CLIP_TEXT", copyTarget)
                       }
+                      val copyPendingIntent = PendingIntent.getBroadcast(
+                          this,
+                          uniqueId + 1,
+                          copyIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+                      builder.addAction(
+                          android.R.drawable.ic_menu_save,
+                          copyLabel,
+                          copyPendingIntent
+                      )
 
                       nm.notify(uniqueId, builder.build())
                   }
@@ -1710,10 +1712,10 @@ jobs:
                           nm.createNotificationChannel(
                               NotificationChannel(
                                   SMS_CHANNEL_ID,
-                                  "Gelen SMS ve Doğrulama Bildirimleri",
+                                  "Gelen SMS Bildirimleri",
                                   NotificationManager.IMPORTANCE_HIGH
                               ).apply {
-                                  description = "Note 10 Lite hattına gelen SMS ve onay kodlarını gösterir"
+                                  description = "Note 10 Lite hattına gelen SMS mesajlarını gösterir"
                                   lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                               }
                           )
@@ -3115,8 +3117,7 @@ jobs:
                           Manifest.permission.READ_CONTACTS,
                           Manifest.permission.READ_CALL_LOG,
                           Manifest.permission.RECEIVE_SMS,
-                          Manifest.permission.SEND_SMS,
-                          Manifest.permission.READ_SMS
+                          Manifest.permission.SEND_SMS
                       )
                       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                           permissions.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -3207,7 +3208,7 @@ jobs:
                               <TextView
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
-                                  android:text="Saf LAN Çağrı, SMS &amp; Bluetooth Köprüsü (v4.7.1)"
+                                  android:text="Saf LAN Çağrı, SMS &amp; Bluetooth Köprüsü (v4.7.2)"
                                   android:textColor="#8AB4F8"
                                   android:textSize="14sp"
                                   android:textStyle="bold" />
@@ -3216,7 +3217,7 @@ jobs:
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
                                   android:layout_marginTop="4dp"
-                                  android:text="Çağrıları, gelen SMS/onay kodlarını ve SMS gönderimini yerel ağdan aktarır. Kapatıp tekrar açtığınızda tüm izinleri otomatik doğrular."
+                                  android:text="Çağrıları, gelen SMS mesajlarını ve SMS gönderimini yerel ağdan aktarır. Kapatıp tekrar açtığınızda tüm izinleri otomatik doğrular."
                                   android:textColor="#9AA0A6"
                                   android:textSize="12sp" />
 
@@ -3760,5 +3761,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v4.7.1-APK
+          name: RemotePhone-v4.7.2-APK
           path: app/build/outputs/apk/debug/app-debug.apk
