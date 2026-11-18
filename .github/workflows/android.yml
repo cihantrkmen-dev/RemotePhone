@@ -73,8 +73,8 @@ jobs:
                       applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 26
-                      versionName = "4.7.0"
+                      versionCode = 27
+                      versionName = "4.7.1"
                   }
 
                   buildTypes {
@@ -643,8 +643,6 @@ jobs:
               }
           """)
 
-          # SmsBridgeReceiver.kt & OtpCopyReceiver.kt:
-          # Note 10 Lite'a gelen SMS'leri anında yakalayıp S25 Ultra'ya aktarır, çevrimdışıysa kuyrukta saklar.
           write_file("app/src/main/java/com/example/remotephone/SmsBridgeReceiver.kt", r"""
               package com.example.remotephone
 
@@ -1234,7 +1232,6 @@ jobs:
                           return START_NOT_STICKY
                       }
 
-                      // Kapatılıp tekrar aktif edildiğinde donanım kilitlerinin açık olduğundan emin ol
                       acquireHardwareLocks()
 
                       val roleText = when (mode) {
@@ -1499,9 +1496,8 @@ jobs:
                           .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                           .setContentIntent(replyPendingIntent)
                           .setAutoCancel(true)
-                          .addAction(android.R.drawable.sym_action_Email, "💬 Yanıtla", replyPendingIntent)
+                          .addAction(android.R.drawable.sym_action_email, "💬 Yanıtla", replyPendingIntent)
 
-                      // SMS içinde 4-8 haneli doğrulama/onay kodu (OTP) varsa "Kodu Kopyala" butonu ekle
                       val otpCode = Regex("\\b(\\d{4,8})\\b").find(bodyText)?.value
                       if (!otpCode.isNullOrEmpty()) {
                           val copyIntent = Intent(this, OtpCopyReceiver::class.java).apply {
@@ -1660,7 +1656,6 @@ jobs:
 
                   override fun onDestroy() {
                       stopRingerAndVibration()
-                      // Eğer kullanıcı servisi kapatıp hemen tekrar yeni bir mod ile başlattıysa yeni soketi kapatma
                       val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
                       if (prefs.getString("saved_mode", "NONE") == "NONE") {
                           HotspotLanBridge.stop()
@@ -2487,8 +2482,6 @@ jobs:
 
                       setupGoogleDialpad(etDialNumber)
 
-                      // Devre dışı bırakıldıktan sonra tekrar 1. Telefon (HOST) olarak aktif edildiğinde
-                      // tüm izinleri, pil muafiyetini, Varsayılan Telefon (Dialer) rolünü ve servisleri eksiksiz doğrular.
                       findViewById<Button>(R.id.btnStartHost).setOnClickListener {
                           prefs.edit().putString("saved_mode", "HOST").apply()
                           requestRuntimePermissions()
@@ -2500,8 +2493,6 @@ jobs:
                           Toast.makeText(this, "1. Telefon (Note 10 Lite) Köprüsü Aktif Edildi", Toast.LENGTH_SHORT).show()
                       }
 
-                      // Devre dışı bırakıldıktan sonra tekrar 2. Telefon (CLIENT) olarak aktif edildiğinde
-                      // bildirim/tam ekran izinlerini, soket bağlantısını ve rehber senkronizasyonunu eksiksiz başlatır.
                       findViewById<Button>(R.id.btnStartClient).setOnClickListener {
                           prefs.edit().putString("saved_mode", "CLIENT").apply()
                           requestRuntimePermissions()
@@ -2843,7 +2834,6 @@ jobs:
                       val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
                       val savedMode = prefs.getString("saved_mode", "NONE") ?: "NONE"
                       if (savedMode != "NONE") {
-                          // Kullanıcı uygulamayı tekrar açtığında servis çalışmıyorsa otomatik ayağa kaldır
                           if (BridgeKeepAliveService.instance == null) {
                               startKeepAliveService(savedMode)
                           }
@@ -3217,7 +3207,7 @@ jobs:
                               <TextView
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
-                                  android:text="Saf LAN Çağrı, SMS &amp; Bluetooth Köprüsü (v4.7)"
+                                  android:text="Saf LAN Çağrı, SMS &amp; Bluetooth Köprüsü (v4.7.1)"
                                   android:textColor="#8AB4F8"
                                   android:textSize="14sp"
                                   android:textStyle="bold" />
@@ -3770,5 +3760,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v4.7.0-APK
+          name: RemotePhone-v4.7.1-APK
           path: app/build/outputs/apk/debug/app-debug.apk
