@@ -70,11 +70,11 @@ jobs:
                   compileSdk = 34
 
                   defaultConfig {
-                      applicationId = "tr.cihan.telefonkoprusu"
+                      applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 28
-                      versionName = "4.7.2"
+                      versionCode = 29
+                      versionName = "4.8.0"
                   }
 
                   buildTypes {
@@ -127,8 +127,6 @@ jobs:
                   <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
                   <uses-permission android:name="android.permission.READ_CONTACTS" />
                   <uses-permission android:name="android.permission.READ_CALL_LOG" />
-                  <uses-permission android:name="android.permission.RECEIVE_SMS" />
-                  <uses-permission android:name="android.permission.SEND_SMS" />
                   <uses-permission android:name="android.permission.RECORD_AUDIO" />
                   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
                   <uses-permission android:name="android.permission.BLUETOOTH" />
@@ -210,21 +208,8 @@ jobs:
                           android:foregroundServiceType="specialUse">
                           <property
                               android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                              android:value="Local LAN telephony companion service" />
+                              android:value="Continuous local Wi-Fi and Hotspot call signaling bridge" />
                       </service>
-
-                      <receiver
-                          android:name=".SmsBridgeReceiver"
-                          android:exported="true"
-                          android:permission="android.permission.BROADCAST_SMS">
-                          <intent-filter>
-                              <action android:name="android.provider.Telephony.SMS_RECEIVED" />
-                          </intent-filter>
-                      </receiver>
-
-                      <receiver
-                          android:name=".ClipboardActionReceiver"
-                          android:exported="false" />
 
                   </application>
               </manifest>
@@ -440,7 +425,6 @@ jobs:
 
               data class ContactItem(val name: String, val number: String)
               data class CallLogItem(val name: String, val number: String, val type: String, val timeText: String)
-              data class SmsLogItem(val senderNumber: String, val senderName: String?, val body: String, val timeText: String)
 
               object ContactHelper {
                   @Volatile
@@ -448,16 +432,6 @@ jobs:
 
                   @Volatile
                   var syncedHostCallLogs: List<CallLogItem> = emptyList()
-
-                  @Volatile
-                  var recentSmsMessages: List<SmsLogItem> = emptyList()
-
-                  fun addRecentSms(senderNumber: String, senderName: String?, body: String, timeText: String) {
-                      val item = SmsLogItem(senderNumber, senderName, body, timeText)
-                      val updated = mutableListOf(item)
-                      updated.addAll(recentSmsMessages.take(49))
-                      recentSmsMessages = updated
-                  }
 
                   fun getContactName(context: Context, phoneNumber: String): String? {
                       val cleanNumber = phoneNumber.trim()
@@ -638,75 +612,6 @@ jobs:
                       val hostName = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
                       val localName = getContactName(context, rawNumber)
                       return Pair(rawNumber, localName ?: hostName)
-                  }
-              }
-          """)
-
-          write_file("app/src/main/java/com/example/remotephone/SmsBridgeReceiver.kt", r"""
-              package com.example.remotephone
-
-              import android.content.BroadcastReceiver
-              import android.content.Context
-              import android.content.Intent
-              import android.provider.Telephony
-              import android.util.Base64
-              import java.text.SimpleDateFormat
-              import java.util.Date
-              import java.util.Locale
-
-              class SmsBridgeReceiver : BroadcastReceiver() {
-                  override fun onReceive(context: Context, intent: Intent) {
-                      if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
-
-                      val prefs = context.getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
-                      if (prefs.getString("saved_mode", "NONE") != "HOST") return
-
-                      val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-                      if (messages.isNullOrEmpty()) return
-
-                      val senderNumber = messages[0].originatingAddress ?: "Bilinmeyen"
-                      val fullBody = StringBuilder()
-                      for (msg in messages) {
-                          msg.messageBody?.let { fullBody.append(it) }
-                      }
-                      val bodyText = fullBody.toString().trim()
-                      if (bodyText.isEmpty()) return
-
-                      val senderName = ContactHelper.getContactName(context, senderNumber) ?: ""
-                      val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-
-                      ContactHelper.addRecentSms(senderNumber, senderName.ifBlank { null }, bodyText, timeStr)
-
-                      val encodedBody = Base64.encodeToString(bodyText.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                      val safeSender = senderNumber.replace("~", "")
-                      val safeName = senderName.replace("~", " ").replace("|", " ")
-                      val payload = "$safeSender~$safeName~$timeStr~$encodedBody"
-
-                      if (HotspotLanBridge.isConnected) {
-                          HotspotLanBridge.send("SMS_IN", payload)
-                      } else {
-                          BridgeKeepAliveService.pendingOfflineSms.add(payload)
-                      }
-                  }
-              }
-          """)
-
-          write_file("app/src/main/java/com/example/remotephone/ClipboardActionReceiver.kt", r"""
-              package com.example.remotephone
-
-              import android.content.BroadcastReceiver
-              import android.content.ClipData
-              import android.content.ClipboardManager
-              import android.content.Context
-              import android.content.Intent
-              import android.widget.Toast
-
-              class ClipboardActionReceiver : BroadcastReceiver() {
-                  override fun onReceive(context: Context, intent: Intent) {
-                      val clipValue = intent.getStringExtra("CLIP_TEXT") ?: return
-                      val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                      cm?.setPrimaryClip(ClipData.newPlainText("Mesaj", clipValue))
-                      Toast.makeText(context, "Panoya kopyalandı: $clipValue", Toast.LENGTH_SHORT).show()
                   }
               }
           """)
@@ -1121,14 +1026,8 @@ jobs:
               import android.os.PowerManager
               import android.os.VibrationEffect
               import android.os.Vibrator
-              import android.telephony.SmsManager
-              import android.util.Base64
-              import android.widget.Toast
               import androidx.core.app.NotificationCompat
               import androidx.core.app.ServiceCompat
-              import java.text.SimpleDateFormat
-              import java.util.Date
-              import java.util.Locale
               import java.util.concurrent.CopyOnWriteArrayList
 
               class BridgeKeepAliveService : Service(), HotspotLanBridge.Listener, BluetoothMonitor.Listener {
@@ -1137,14 +1036,12 @@ jobs:
                       private const val CHANNEL_ID = "RemotePhoneKeepAliveChannel"
                       private const val CALL_CHANNEL_ID = "IncomingRemoteCallChannel"
                       private const val MISSED_CALL_CHANNEL_ID = "MissedRemoteCallChannel"
-                      private const val SMS_CHANNEL_ID = "IncomingRemoteSmsChannel"
                       private const val MISSED_CALL_GROUP = "GROUP_MISSED_REMOTE_CALLS"
                       private const val NOTIFICATION_ID = 1001
                       const val CALL_NOTIFICATION_ID = 2002
 
                       var instance: BridgeKeepAliveService? = null
                       val pendingOfflineMissedCalls = CopyOnWriteArrayList<String>()
-                      val pendingOfflineSms = CopyOnWriteArrayList<String>()
 
                       fun stopIncomingRinging() {
                           instance?.stopRingerAndVibration()
@@ -1234,13 +1131,13 @@ jobs:
                       acquireHardwareLocks()
 
                       val roleText = when (mode) {
-                          "HOST" -> "1. Telefon (Note 10 Lite Ana Hat & SMS) Aktif"
-                          "CLIENT" -> "2. Telefon (S25 Ultra Uzak Kontrolcü & SMS) Aktif"
+                          "HOST" -> "1. Telefon (Note 10 Lite Ana Hat) Aktif"
+                          "CLIENT" -> "2. Telefon (S25 Ultra Uzak Kontrolcü) Aktif"
                           else -> "Servis Hazır"
                       }
 
                       val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-                          .setContentTitle("Telefon & SMS Köprüsü")
+                          .setContentTitle("Telefon Köprüsü")
                           .setContentText(roleText)
                           .setSmallIcon(R.drawable.ic_launcher)
                           .setOngoing(true)
@@ -1275,25 +1172,17 @@ jobs:
                               HotspotLanBridge.send("REQ_CONTACTS")
                           } else if (mode == "HOST") {
                               sendHostTelemetry()
-                              flushPendingOfflineEvents()
+                              flushPendingOfflineMissedCalls()
                           }
                       }
                   }
 
-                  private fun flushPendingOfflineEvents() {
-                      if (!HotspotLanBridge.isConnected) return
-                      if (pendingOfflineMissedCalls.isNotEmpty()) {
+                  private fun flushPendingOfflineMissedCalls() {
+                      if (pendingOfflineMissedCalls.isNotEmpty() && HotspotLanBridge.isConnected) {
                           val copy = pendingOfflineMissedCalls.toList()
                           pendingOfflineMissedCalls.clear()
                           for (missedPayload in copy) {
                               HotspotLanBridge.send("MISSED", missedPayload)
-                          }
-                      }
-                      if (pendingOfflineSms.isNotEmpty()) {
-                          val smsCopy = pendingOfflineSms.toList()
-                          pendingOfflineSms.clear()
-                          for (smsPayload in smsCopy) {
-                              HotspotLanBridge.send("SMS_IN", smsPayload)
                           }
                       }
                   }
@@ -1374,21 +1263,6 @@ jobs:
                                   showMissedCallNotificationOnClient(data)
                               }
                           }
-                          "SMS_IN" -> {
-                              if (mode == "CLIENT") {
-                                  handleIncomingSmsOnClient(data)
-                              }
-                          }
-                          "SEND_SMS" -> {
-                              if (mode == "HOST") {
-                                  handleSendSmsOnHost(data)
-                              }
-                          }
-                          "SMS_STATUS" -> {
-                              if (mode == "CLIENT") {
-                                  Toast.makeText(this, data, Toast.LENGTH_LONG).show()
-                              }
-                          }
                           "DIAL" -> {
                               if (mode == "HOST" && HostInCallService.instance == null && data.isNotEmpty()) {
                                   HostInCallService.placeSystemCall(this, data)
@@ -1405,7 +1279,7 @@ jobs:
                                       HotspotLanBridge.send("RES_CALLLOGS", logsPayload)
                                   }
                                   sendHostTelemetry()
-                                  flushPendingOfflineEvents()
+                                  flushPendingOfflineMissedCalls()
                               }
                           }
                           "RES_CONTACTS" -> {
@@ -1415,110 +1289,6 @@ jobs:
                               ContactHelper.updateSyncedCallLogs(data)
                           }
                       }
-                  }
-
-                  private fun handleSendSmsOnHost(payload: String) {
-                      val parts = payload.split("~", limit = 2)
-                      if (parts.size < 2) return
-                      val targetNumber = parts[0].trim()
-                      val bodyText = try {
-                          String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
-                      } catch (_: Exception) {
-                          ""
-                      }
-                      if (targetNumber.isEmpty() || bodyText.isEmpty()) return
-
-                      try {
-                          val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                              getSystemService(SmsManager::class.java)
-                          } else {
-                              @Suppress("DEPRECATION")
-                              SmsManager.getDefault()
-                          }
-                          val partsList = smsManager.divideMessage(bodyText)
-                          if (partsList.size > 1) {
-                              smsManager.sendMultipartTextMessage(targetNumber, null, partsList, null, null)
-                          } else {
-                              smsManager.sendTextMessage(targetNumber, null, bodyText, null, null)
-                          }
-                          val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-                          val resolvedName = ContactHelper.getContactName(this, targetNumber)
-                          ContactHelper.addRecentSms(targetNumber, resolvedName, "↗ Siz: $bodyText", timeStr)
-                          HotspotLanBridge.send("SMS_STATUS", "✅ SMS Gönderildi ($targetNumber)")
-                      } catch (e: Exception) {
-                          HotspotLanBridge.send("SMS_STATUS", "❌ SMS Gönderilemedi: ${e.localizedMessage ?: "Hata"}")
-                      }
-                  }
-
-                  private fun handleIncomingSmsOnClient(payload: String) {
-                      val parts = payload.split("~", limit = 4)
-                      if (parts.size < 4) return
-                      val senderNum = parts[0].ifBlank { "Bilinmeyen" }
-                      val hostName = parts[1].takeIf { it.isNotBlank() }
-                      val timeStr = parts[2]
-                      val bodyText = try {
-                          String(Base64.decode(parts[3], Base64.NO_WRAP), Charsets.UTF_8)
-                      } catch (_: Exception) {
-                          parts[3]
-                      }
-
-                      val localName = ContactHelper.getContactName(this, senderNum)
-                      val finalName = localName ?: hostName
-                      ContactHelper.addRecentSms(senderNum, finalName, bodyText, timeStr)
-
-                      val title = if (!finalName.isNullOrBlank()) {
-                          "💬 SMS: $finalName ($senderNum)"
-                      } else {
-                          "💬 SMS: $senderNum"
-                      }
-
-                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                      val uniqueId = (System.currentTimeMillis() and 0xFFFFFFF).toInt()
-
-                      val replyIntent = Intent(this, MainActivity::class.java).apply {
-                          flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                          putExtra("OPEN_SMS_TARGET", senderNum)
-                      }
-                      val replyPendingIntent = PendingIntent.getActivity(
-                          this,
-                          uniqueId,
-                          replyIntent,
-                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                      )
-
-                      val builder = NotificationCompat.Builder(this, SMS_CHANNEL_ID)
-                          .setSmallIcon(android.R.drawable.sym_action_email)
-                          .setContentTitle(title)
-                          .setContentText(bodyText)
-                          .setStyle(NotificationCompat.BigTextStyle().bigText("$bodyText\n\nSaat: $timeStr"))
-                          .setPriority(NotificationCompat.PRIORITY_HIGH)
-                          .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                          .setContentIntent(replyPendingIntent)
-                          .setAutoCancel(true)
-                          .addAction(android.R.drawable.sym_action_email, "💬 Yanıtla", replyPendingIntent)
-
-                      val numericToken = bodyText.split(" ", "\n", "\t", ":", ".", ",", "-")
-                          .firstOrNull { token -> token.length in 4..8 && token.all { it.isDigit() } }
-
-                      val copyTarget = numericToken ?: bodyText
-                      val copyLabel = if (numericToken != null) "📋 Kopyala ($numericToken)" else "📋 Metni Kopyala"
-
-                      val copyIntent = Intent(this, ClipboardActionReceiver::class.java).apply {
-                          putExtra("CLIP_TEXT", copyTarget)
-                      }
-                      val copyPendingIntent = PendingIntent.getBroadcast(
-                          this,
-                          uniqueId + 1,
-                          copyIntent,
-                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                      )
-                      builder.addAction(
-                          android.R.drawable.ic_menu_save,
-                          copyLabel,
-                          copyPendingIntent
-                      )
-
-                      nm.notify(uniqueId, builder.build())
                   }
 
                   fun showIncomingCallNotification(callerPayload: String, isLocalHostFallback: Boolean) {
@@ -1706,16 +1476,6 @@ jobs:
                                   NotificationManager.IMPORTANCE_HIGH
                               ).apply {
                                   description = "Cevaplanmayan çağrıları bildirim kutusunda gösterir"
-                                  lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                              }
-                          )
-                          nm.createNotificationChannel(
-                              NotificationChannel(
-                                  SMS_CHANNEL_ID,
-                                  "Gelen SMS Bildirimleri",
-                                  NotificationManager.IMPORTANCE_HIGH
-                              ).apply {
-                                  description = "Note 10 Lite hattına gelen SMS mesajlarını gösterir"
                                   lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                               }
                           )
@@ -2378,10 +2138,8 @@ jobs:
               import android.os.VibrationEffect
               import android.os.Vibrator
               import android.provider.Settings
-              import android.telephony.SmsManager
               import android.text.Editable
               import android.text.TextWatcher
-              import android.util.Base64
               import android.view.HapticFeedbackConstants
               import android.view.View
               import android.widget.ArrayAdapter
@@ -2396,9 +2154,6 @@ jobs:
               import androidx.appcompat.app.AppCompatActivity
               import androidx.core.content.ContextCompat
               import com.google.android.material.card.MaterialCardView
-              import java.text.SimpleDateFormat
-              import java.util.Date
-              import java.util.Locale
 
               class MainActivity : AppCompatActivity(), HotspotLanBridge.Listener, BluetoothMonitor.Listener {
 
@@ -2475,11 +2230,6 @@ jobs:
                               HotspotLanBridge.send("REQ_CONTACTS")
                           }
                           showContactsAndLogsDialog()
-                      }
-
-                      findViewById<Button>(R.id.btnSmsDialog).setOnClickListener {
-                          val prefillTarget = etDialNumber.text.toString().trim()
-                          showSmsCenterDialog(prefillTarget)
                       }
 
                       setupGoogleDialpad(etDialNumber)
@@ -2610,131 +2360,6 @@ jobs:
                               intent.removeExtra("AUTO_CALL_FROM_NOTIFICATION")
                               initiateCallAccordingToConnectionRule(prefill)
                           }
-                      }
-                      val smsTarget = intent.getStringExtra("OPEN_SMS_TARGET")
-                      if (!smsTarget.isNullOrBlank()) {
-                          intent.removeExtra("OPEN_SMS_TARGET")
-                          etDialNumber.setText(smsTarget)
-                          showSmsCenterDialog(smsTarget)
-                      }
-                  }
-
-                  private fun showSmsCenterDialog(initialRecipient: String) {
-                      val container = LinearLayout(this).apply {
-                          orientation = LinearLayout.VERTICAL
-                          setPadding(36, 20, 36, 12)
-                      }
-
-                      val etRecipient = EditText(this).apply {
-                          hint = "Alıcı Numara (Örn: 0555...)"
-                          setText(initialRecipient)
-                          isSingleLine = true
-                      }
-
-                      val resolvedName = ContactHelper.getContactName(this, initialRecipient)
-                      val tvResolvedRecipient = TextView(this).apply {
-                          text = if (!resolvedName.isNullOrBlank()) "Kişi: $resolvedName" else "Kişi seçmek için aşağıdaki son mesajlara dokunabilirsiniz"
-                          textSize = 12f
-                          setPadding(4, 4, 4, 12)
-                      }
-
-                      val etMessageBody = EditText(this).apply {
-                          hint = "Gönderilecek SMS metnini yazın..."
-                          minLines = 3
-                          maxLines = 5
-                      }
-
-                      val tvHistoryHeader = TextView(this).apply {
-                          text = "📩 Son Gelen / Giden SMS'ler (Yanıtlamak için dokunun):"
-                          textSize = 13f
-                          setPadding(4, 16, 4, 8)
-                      }
-
-                      val listView = ListView(this).apply {
-                          layoutParams = LinearLayout.LayoutParams(
-                              LinearLayout.LayoutParams.MATCH_PARENT,
-                              420
-                          )
-                      }
-
-                      val smsItems = ContactHelper.recentSmsMessages
-                      val displayRows = smsItems.map { item ->
-                          val title = if (!item.senderName.isNullOrBlank()) "${item.senderName} (${item.senderNumber})" else item.senderNumber
-                          "$title • ${item.timeText}" + NL + item.body
-                      }
-                      listView.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, displayRows)
-
-                      listView.setOnItemClickListener { _, _, position, _ ->
-                          val selected = smsItems.getOrNull(position) ?: return@setOnItemClickListener
-                          etRecipient.setText(selected.senderNumber)
-                          etDialNumber.setText(selected.senderNumber)
-                          val name = selected.senderName ?: ContactHelper.getContactName(this, selected.senderNumber)
-                          tvResolvedRecipient.text = if (!name.isNullOrBlank()) "Kişi: $name" else "Numara: ${selected.senderNumber}"
-                      }
-
-                      container.addView(etRecipient)
-                      container.addView(tvResolvedRecipient)
-                      container.addView(etMessageBody)
-                      container.addView(tvHistoryHeader)
-                      container.addView(listView)
-
-                      AlertDialog.Builder(this)
-                          .setTitle("💬 SMS Gönder & Gelen Kutusu")
-                          .setView(container)
-                          .setPositiveButton("Gönder") { _, _ ->
-                              val target = etRecipient.text.toString().trim()
-                              val msg = etMessageBody.text.toString().trim()
-                              if (target.isEmpty() || msg.isEmpty()) {
-                                  Toast.makeText(this, "Lütfen alıcı numarası ve mesaj metni girin", Toast.LENGTH_SHORT).show()
-                              } else {
-                                  sendSmsViaBridgeOrLocal(target, msg)
-                              }
-                          }
-                          .setNeutralButton("Rehberden Seç") { _, _ ->
-                              showContactsAndLogsDialog()
-                          }
-                          .setNegativeButton("Kapat", null)
-                          .show()
-                  }
-
-                  private fun sendSmsViaBridgeOrLocal(targetNumber: String, messageText: String) {
-                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
-                      val mode = prefs.getString("saved_mode", "NONE")
-                      val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-                      val resolvedName = ContactHelper.getContactName(this, targetNumber)
-
-                      if (mode == "CLIENT") {
-                          if (!HotspotLanBridge.isConnected) {
-                              playErrorAlertFeedback()
-                              Toast.makeText(this, "⚠️ Note 10 Lite bağlantısı kopuk! SMS gönderilemedi.", Toast.LENGTH_LONG).show()
-                              return
-                          }
-                          val encoded = Base64.encodeToString(messageText.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                          val safeTarget = targetNumber.replace("~", "")
-                          HotspotLanBridge.send("SEND_SMS", "$safeTarget~$encoded")
-                          ContactHelper.addRecentSms(targetNumber, resolvedName, "↗ Siz: $messageText", timeStr)
-                          Toast.makeText(this, "📤 SMS Note 10 Lite üzerinden gönderiliyor...", Toast.LENGTH_SHORT).show()
-                      } else if (mode == "HOST") {
-                          try {
-                              val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                  getSystemService(SmsManager::class.java)
-                              } else {
-                                  @Suppress("DEPRECATION")
-                                  SmsManager.getDefault()
-                              }
-                              val parts = smsManager.divideMessage(messageText)
-                              if (parts.size > 1) {
-                                  smsManager.sendMultipartTextMessage(targetNumber, null, parts, null, null)
-                              } else {
-                                  smsManager.sendTextMessage(targetNumber, null, messageText, null, null)
-                              }
-                              ContactHelper.addRecentSms(targetNumber, resolvedName, "↗ Siz: $messageText", timeStr)
-                              Toast.makeText(this, "✅ SMS Gönderildi", Toast.LENGTH_SHORT).show()
-                          } catch (e: Exception) {
-                              Toast.makeText(this, "❌ SMS Hatası: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                          }
-                      } else {
-                          Toast.makeText(this, "Önce Kurulum menüsünden telefon modunu aktif edin", Toast.LENGTH_SHORT).show()
                       }
                   }
 
@@ -2999,7 +2624,7 @@ jobs:
 
                       if (connected) {
                           tvConnectionStatus.text = if (mode == "HOST") {
-                              "● S25 Ultra Bağlı (Çağrı & SMS Köprüsü) | $hsSummary"
+                              "● S25 Ultra Bağlı (Sessiz Köprü) | $hsSummary"
                           } else {
                               val batInfo = if (hostBatteryPart.isNotEmpty()) " | $hostBatteryPart" else ""
                               "● Bağlı$batInfo | $hsSummary"
@@ -3115,9 +2740,7 @@ jobs:
                           Manifest.permission.ANSWER_PHONE_CALLS,
                           Manifest.permission.RECORD_AUDIO,
                           Manifest.permission.READ_CONTACTS,
-                          Manifest.permission.READ_CALL_LOG,
-                          Manifest.permission.RECEIVE_SMS,
-                          Manifest.permission.SEND_SMS
+                          Manifest.permission.READ_CALL_LOG
                       )
                       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                           permissions.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -3208,7 +2831,7 @@ jobs:
                               <TextView
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
-                                  android:text="Saf LAN Çağrı, SMS &amp; Bluetooth Köprüsü (v4.7.2)"
+                                  android:text="Saf LAN Kontrol &amp; Bluetooth Modu (v4.8)"
                                   android:textColor="#8AB4F8"
                                   android:textSize="14sp"
                                   android:textStyle="bold" />
@@ -3217,7 +2840,7 @@ jobs:
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
                                   android:layout_marginTop="4dp"
-                                  android:text="Çağrıları, gelen SMS mesajlarını ve SMS gönderimini yerel ağdan aktarır. Kapatıp tekrar açtığınızda tüm izinleri otomatik doğrular."
+                                  android:text="Mobil veri kapalı olsa bile Hotspot/Wi-Fi üzerinden kesintisiz çalışır. Kullanmadığınızda pil tasarrufu için kapatabilirsiniz."
                                   android:textColor="#9AA0A6"
                                   android:textSize="12sp" />
 
@@ -3271,39 +2894,23 @@ jobs:
                           android:layout_height="wrap_content"
                           android:gravity="center_vertical"
                           android:orientation="horizontal"
-                          android:paddingHorizontal="6dp"
+                          android:paddingHorizontal="8dp"
                           android:paddingBottom="14dp">
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/btnContacts"
                               style="@style/Widget.Material3.Button.TonalButton"
-                              android:layout_width="48dp"
-                              android:layout_height="48dp"
+                              android:layout_width="56dp"
+                              android:layout_height="52dp"
                               android:insetLeft="0dp"
                               android:insetTop="0dp"
                               android:insetRight="0dp"
                               android:insetBottom="0dp"
                               android:text="👤"
                               android:textColor="#FFFFFF"
-                              android:textSize="19sp"
+                              android:textSize="22sp"
                               app:backgroundTint="#1A73E8"
-                              app:cornerRadius="24dp" />
-
-                          <com.google.android.material.button.MaterialButton
-                              android:id="@+id/btnSmsDialog"
-                              style="@style/Widget.Material3.Button.TonalButton"
-                              android:layout_width="48dp"
-                              android:layout_height="48dp"
-                              android:layout_marginStart="6dp"
-                              android:insetLeft="0dp"
-                              android:insetTop="0dp"
-                              android:insetRight="0dp"
-                              android:insetBottom="0dp"
-                              android:text="💬"
-                              android:textColor="#FFFFFF"
-                              android:textSize="19sp"
-                              app:backgroundTint="#1E8E3E"
-                              app:cornerRadius="24dp" />
+                              app:cornerRadius="26dp" />
 
                           <EditText
                               android:id="@+id/etDialNumber"
@@ -3314,21 +2921,21 @@ jobs:
                               android:focusable="false"
                               android:gravity="center"
                               android:hint="Numara girin"
-                              android:letterSpacing="0.06"
+                              android:letterSpacing="0.08"
                               android:singleLine="true"
                               android:textColor="#FFFFFF"
                               android:textColorHint="#6E7681"
-                              android:textSize="30sp"
+                              android:textSize="34sp"
                               android:textStyle="bold" />
 
                           <com.google.android.material.button.MaterialButton
                               android:id="@+id/btnBackspace"
                               style="@style/Widget.Material3.Button.TextButton"
-                              android:layout_width="48dp"
-                              android:layout_height="48dp"
+                              android:layout_width="52dp"
+                              android:layout_height="52dp"
                               android:text="⌫"
                               android:textColor="#E8EAED"
-                              android:textSize="22sp" />
+                              android:textSize="24sp" />
                       </LinearLayout>
 
                       <GridLayout
@@ -3761,5 +3368,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v4.7.2-APK
+          name: RemotePhone-v4.8.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
