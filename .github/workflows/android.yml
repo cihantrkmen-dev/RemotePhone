@@ -73,8 +73,8 @@ jobs:
                       applicationId = "com.example.remotephone"
                       minSdk = 26
                       targetSdk = 34
-                      versionCode = 23
-                      versionName = "4.4.0"
+                      versionCode = 25
+                      versionName = "4.6.0"
                   }
 
                   buildTypes {
@@ -213,6 +213,202 @@ jobs:
 
                   </application>
               </manifest>
+          """)
+
+          # BluetoothMonitor.kt:
+          # CopyOnWriteArraySet ile çoklu dinleyici (Listener) desteği eklendi; hiçbir ekran/servis birbirinin dinleyicisini ezmez.
+          write_file("app/src/main/java/com/example/remotephone/BluetoothMonitor.kt", r"""
+              package com.example.remotephone
+
+              import android.annotation.SuppressLint
+              import android.bluetooth.BluetoothAdapter
+              import android.bluetooth.BluetoothDevice
+              import android.bluetooth.BluetoothHeadset
+              import android.bluetooth.BluetoothProfile
+              import android.content.BroadcastReceiver
+              import android.content.Context
+              import android.content.Intent
+              import android.content.IntentFilter
+              import android.media.AudioDeviceInfo
+              import android.media.AudioManager
+              import java.util.concurrent.CopyOnWriteArraySet
+
+              data class HeadsetStatus(
+                  val isReady: Boolean,
+                  val batteryPercent: Int,
+                  val deviceName: String?,
+                  val summaryText: String
+              )
+
+              object BluetoothMonitor {
+                  interface Listener {
+                      fun onHeadsetStateChanged(status: HeadsetStatus)
+                  }
+
+                  private val listeners = CopyOnWriteArraySet<Listener>()
+
+                  @Volatile
+                  private var headsetProxy: BluetoothHeadset? = null
+                  @Volatile
+                  private var lastKnownBattery: Int = -1
+                  @Volatile
+                  var hostHeadsetReady: Boolean = true
+                  @Volatile
+                  var hostHeadsetSummary: String = "Kulaklık: Kontrol Ediliyor"
+
+                  private var isInitialized = false
+
+                  fun addListener(listener: Listener) {
+                      listeners.add(listener)
+                  }
+
+                  fun removeListener(listener: Listener) {
+                      listeners.remove(listener)
+                  }
+
+                  private fun notifyListeners(context: Context) {
+                      val status = getLocalHeadsetStatus(context)
+                      for (l in listeners) {
+                          try {
+                              l.onHeadsetStateChanged(status)
+                          } catch (_: Exception) {}
+                      }
+                  }
+
+                  @SuppressLint("MissingPermission")
+                  fun init(context: Context) {
+                      if (isInitialized) return
+                      isInitialized = true
+                      val appCtx = context.applicationContext
+
+                      try {
+                          val adapter = BluetoothAdapter.getDefaultAdapter()
+                          adapter?.getProfileProxy(appCtx, object : BluetoothProfile.ServiceListener {
+                              override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
+                                  if (profile == BluetoothProfile.HEADSET) {
+                                      headsetProxy = proxy as? BluetoothHeadset
+                                      notifyListeners(appCtx)
+                                  }
+                              }
+                              override fun onServiceDisconnected(profile: Int) {
+                                  if (profile == BluetoothProfile.HEADSET) {
+                                      headsetProxy = null
+                                      notifyListeners(appCtx)
+                                  }
+                              }
+                          }, BluetoothProfile.HEADSET)
+                      } catch (_: Exception) {}
+
+                      try {
+                          val filter = IntentFilter().apply {
+                              addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+                              addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+                              addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+                              addAction("android.bluetooth.device.action.BATTERY_LEVEL_CHANGED")
+                          }
+                          appCtx.registerReceiver(object : BroadcastReceiver() {
+                              override fun onReceive(ctx: Context?, intent: Intent?) {
+                                  if (intent?.action == "android.bluetooth.device.action.BATTERY_LEVEL_CHANGED") {
+                                      val level = intent.getIntExtra("android.bluetooth.device.extra.BATTERY_LEVEL", -1)
+                                      if (level in 0..100) {
+                                          lastKnownBattery = level
+                                      }
+                                  }
+                                  if (ctx != null) {
+                                      notifyListeners(ctx)
+                                  }
+                              }
+                          }, filter)
+                      } catch (_: Exception) {}
+                  }
+
+                  @SuppressLint("MissingPermission")
+                  fun getLocalHeadsetStatus(context: Context): HeadsetStatus {
+                      var connected = false
+                      var name: String? = null
+                      var battery = lastKnownBattery
+
+                      try {
+                          val adapter = BluetoothAdapter.getDefaultAdapter()
+                          if (adapter != null && adapter.isEnabled) {
+                              val devices = headsetProxy?.connectedDevices.orEmpty()
+                              if (devices.isNotEmpty()) {
+                                  connected = true
+                                  val dev = devices.first()
+                                  name = dev.name
+                                  val reflectedBat = readBatteryLevelViaReflection(dev)
+                                  if (reflectedBat in 0..100) {
+                                      battery = reflectedBat
+                                      lastKnownBattery = reflectedBat
+                                  }
+                              }
+                          }
+                      } catch (_: Exception) {}
+
+                      if (!connected) {
+                          try {
+                              val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                              val outDevices = am?.getDevices(AudioManager.GET_DEVICES_OUTPUTS).orEmpty()
+                              val btAudio = outDevices.firstOrNull {
+                                  it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                                  it.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                                  it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+                              }
+                              if (btAudio != null) {
+                                  connected = true
+                                  name = btAudio.productName?.toString()
+                              }
+                          } catch (_: Exception) {}
+                      }
+
+                      if (!connected) {
+                          return HeadsetStatus(
+                              isReady = false,
+                              batteryPercent = -1,
+                              deviceName = null,
+                              summaryText = "⚠️ Kulaklık: Bağlı Değil"
+                          )
+                      }
+
+                      val summary = when {
+                          battery in 0..20 -> "⚠️ Kulaklık: Hazır (%$battery - Düşük)"
+                          battery in 21..100 -> "Kulaklık: Hazır (%$battery)"
+                          else -> "Kulaklık: Hazır"
+                      }
+
+                      return HeadsetStatus(
+                          isReady = true,
+                          batteryPercent = battery,
+                          deviceName = name,
+                          summaryText = summary
+                      )
+                  }
+
+                  private fun readBatteryLevelViaReflection(device: BluetoothDevice): Int {
+                      return try {
+                          val method = device.javaClass.getMethod("getBatteryLevel")
+                          (method.invoke(device) as? Int) ?: -1
+                      } catch (_: Exception) {
+                          -1
+                      }
+                  }
+
+                  fun isAnyHeadsetReady(context: Context): Boolean {
+                      val local = getLocalHeadsetStatus(context)
+                      return local.isReady || hostHeadsetReady
+                  }
+
+                  fun getCombinedHeadsetSummary(context: Context): String {
+                      val local = getLocalHeadsetStatus(context)
+                      if (local.isReady && local.batteryPercent in 0..100 && !hostHeadsetSummary.contains("%")) {
+                          return local.summaryText
+                      }
+                      if (hostHeadsetReady) {
+                          return hostHeadsetSummary
+                      }
+                      return local.summaryText
+                  }
+              }
           """)
 
           write_file("app/src/main/java/com/example/remotephone/ContactHelper.kt", r"""
@@ -422,9 +618,6 @@ jobs:
               }
           """)
 
-          # HotspotLanBridge.kt:
-          # Note 10 Lite'ta MOBİL VERİ KAPALI OLSA BİLE (İnternetsiz Hotspot / İnternetsiz Ortak Wi-Fi)
-          # TRANSPORT_WIFI ağını doğrudan bulup soketleri o ağa bağlayan (bindSocket) %100 kararlı LAN motoru.
           write_file("app/src/main/java/com/example/remotephone/HotspotLanBridge.kt", r"""
               package com.example.remotephone
 
@@ -553,11 +746,17 @@ jobs:
 
                   fun triggerScreenWakeRefresh(context: Context) {
                       val appCtx = context.applicationContext
+                      val prefs = appCtx.getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      val savedMode = prefs.getString("saved_mode", "NONE") ?: "NONE"
+                      if (savedMode == "NONE") return
+
                       scope.launch {
                           if (!isConnected) {
-                              val connectedSocket = tryConnectToHost(appCtx)
-                              if (connectedSocket != null) {
-                                  handleSocket(connectedSocket)
+                              if (savedMode == "CLIENT") {
+                                  val connectedSocket = tryConnectToHost(appCtx)
+                                  if (connectedSocket != null) {
+                                      handleSocket(connectedSocket)
+                                  }
                               }
                           } else {
                               try {
@@ -572,8 +771,6 @@ jobs:
                       }
                   }
 
-                  // İNTERNETSİZ HOTSPOT / WI-FI AĞINI BULAN ÖZEL METOT:
-                  // Mobil veri kapalıyken cm.activeNetwork null dönebileceği için doğrudan TRANSPORT_WIFI ağını bulur!
                   fun findActiveWifiNetwork(context: Context): Network? {
                       val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                       for (net in cm.allNetworks) {
@@ -589,7 +786,6 @@ jobs:
                       val wifiNetwork = findActiveWifiNetwork(context)
                       val candidates = collectAllCandidateHostIps(context, wifiNetwork)
 
-                      // Ortak Wi-Fi ağı için UDP Broadcast taraması (soketi doğrudan Wi-Fi ağına bağlayarak)
                       discoverHostViaUdpBroadcast(wifiNetwork)?.let { foundIp ->
                           discoveredHostIp = foundIp
                           candidates.add(0, foundIp)
@@ -598,7 +794,6 @@ jobs:
                       for (ip in candidates.distinct()) {
                           try {
                               val s = Socket()
-                              // Kritik: Mobil veri kapalıyken Android'in paketi düşürmemesi için soketi doğrudan Wi-Fi ağına bağla!
                               try { wifiNetwork?.bindSocket(s) } catch (_: Exception) {}
                               s.connect(InetSocketAddress(ip, TCP_PORT), 1600)
                               discoveredHostIp = ip
@@ -608,14 +803,12 @@ jobs:
                       return null
                   }
 
-                  // Mobil veri kapalı olsa bile Hotspot veya Ortak Wi-Fi üzerindeki olası tüm Gateway/Host IP'lerini toplar
                   private fun collectAllCandidateHostIps(context: Context, wifiNetwork: Network?): MutableList<String> {
                       val list = mutableListOf<String>()
                       discoveredHostIp?.let { if (it.isNotBlank()) list.add(it) }
 
                       val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-                      // 1. TRANSPORT_WIFI ağının LinkProperties içindeki Gateway ve DHCP Sunucu adresleri
                       if (wifiNetwork != null) {
                           val linkProps: LinkProperties? = cm.getLinkProperties(wifiNetwork)
                           if (linkProps != null) {
@@ -631,7 +824,6 @@ jobs:
                                       val hostAddr = addr.hostAddress ?: ""
                                       val prefix = hostAddr.substringBeforeLast(".", "")
                                       if (prefix.isNotEmpty()) {
-                                          // S25 Ultra örn. 192.168.43.105 aldıysa Note 10 Lite %99 192.168.43.1 adresindedir
                                           list.add("$prefix.1")
                                       }
                                   }
@@ -639,7 +831,6 @@ jobs:
                           }
                       }
 
-                      // 2. WifiManager.dhcpInfo üzerinden Gateway IP (İnternet olmasa bile DHCP her zaman çalışır)
                       try {
                           val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
                           @Suppress("DEPRECATION")
@@ -651,7 +842,6 @@ jobs:
                           }
                       } catch (_: Exception) {}
 
-                      // 3. Ağ arayüzlerinden (wlan0) alt ağın .1 adresini çıkar
                       try {
                           val interfaces = NetworkInterface.getNetworkInterfaces()
                           while (interfaces.hasMoreElements()) {
@@ -667,7 +857,6 @@ jobs:
                           }
                       } catch (_: Exception) {}
 
-                      // 4. Standart Samsung / Android Hotspot varsayılan IP'leri
                       list.add("192.168.43.1")
                       list.add("192.168.137.1")
                       return list
@@ -722,6 +911,7 @@ jobs:
                   fun stop() {
                       activeJob?.cancel()
                       discoveryJob?.cancel()
+                      writer = null
                       try { udpSocket?.close() } catch (_: Exception) {}
                       try { currentSocket?.close() } catch (_: Exception) {}
                       try { serverSocket?.close() } catch (_: Exception) {}
@@ -811,9 +1001,6 @@ jobs:
               }
           """)
 
-          # BridgeKeepAliveService.kt:
-          # İnternet Şartı Olmayan (`removeCapability(NET_CAPABILITY_INTERNET)`) Özel Wi-Fi Ağ İzleyicisi
-          # Böylece Note 10 Lite mobil verisi kapalıyken bile S25 Ultra Wi-Fi/Hotspot bağlantısını anında algılar ve korur!
           write_file("app/src/main/java/com/example/remotephone/BridgeKeepAliveService.kt", r"""
               package com.example.remotephone
 
@@ -823,7 +1010,6 @@ jobs:
               import android.app.NotificationManager
               import android.app.PendingIntent
               import android.app.Service
-              import android.bluetooth.BluetoothAdapter
               import android.content.BroadcastReceiver
               import android.content.Context
               import android.content.Intent
@@ -846,7 +1032,7 @@ jobs:
               import androidx.core.app.ServiceCompat
               import java.util.concurrent.CopyOnWriteArrayList
 
-              class BridgeKeepAliveService : Service(), HotspotLanBridge.Listener {
+              class BridgeKeepAliveService : Service(), HotspotLanBridge.Listener, BluetoothMonitor.Listener {
 
                   companion object {
                       private const val CHANNEL_ID = "RemotePhoneKeepAliveChannel"
@@ -887,9 +1073,11 @@ jobs:
                       super.onCreate()
                       instance = this
                       vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                      BluetoothMonitor.init(this)
                       createNotificationChannels()
                       acquireHardwareLocks()
                       HotspotLanBridge.addListener(this)
+                      BluetoothMonitor.addListener(this)
 
                       val filter = IntentFilter().apply {
                           addAction(Intent.ACTION_SCREEN_ON)
@@ -900,8 +1088,16 @@ jobs:
                       registerInternetlessWifiWatcher()
                   }
 
-                  // KRİTİK: registerDefaultNetworkCallback yerine İNTERNET ŞARTI ARAMAYAN (removeCapability) Wi-Fi izleyicisi!
-                  // Note 10 Lite'ta mobil veri kapalı olsa bile Hotspot bağlandığı milisaniyede tetiklenir.
+                  override fun onHeadsetStateChanged(status: HeadsetStatus) {
+                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      if (prefs.getString("saved_mode", "") == "HOST") {
+                          if (HotspotLanBridge.isConnected) {
+                              sendHostTelemetry()
+                          }
+                          HostInCallService.instance?.onBluetoothHeadsetReconnected()
+                      }
+                  }
+
                   private fun registerInternetlessWifiWatcher() {
                       try {
                           val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -926,6 +1122,13 @@ jobs:
                   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
                       val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
                       val mode = intent?.getStringExtra("MODE") ?: prefs.getString("saved_mode", "NONE") ?: "NONE"
+
+                      if (mode == "NONE") {
+                          HotspotLanBridge.stop()
+                          stopForeground(STOP_FOREGROUND_REMOVE)
+                          stopSelf()
+                          return START_NOT_STICKY
+                      }
 
                       val roleText = when (mode) {
                           "HOST" -> "1. Telefon (Note 10 Lite Ana Hat) Aktif"
@@ -985,13 +1188,16 @@ jobs:
                   }
 
                   @SuppressLint("MissingPermission")
-                  private fun sendHostTelemetry() {
+                  fun sendHostTelemetry() {
                       try {
                           val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
                           val pct = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
-                          val btOn = BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
-                          val btText = if (btOn) "Kulaklık: Hazır" else "BT: Kapalı"
-                          HotspotLanBridge.send("TELEMETRY", "Note 10 Lite Pil: %$pct | $btText")
+                          val hs = BluetoothMonitor.getLocalHeadsetStatus(this)
+                          val readyFlag = if (hs.isReady) "1" else "0"
+                          HotspotLanBridge.send(
+                              "TELEMETRY",
+                              "$readyFlag~Note 10 Lite Pil: %$pct | ${hs.summaryText}"
+                          )
                       } catch (_: Exception) {}
                   }
 
@@ -1024,6 +1230,16 @@ jobs:
                       val mode = prefs.getString("saved_mode", "")
 
                       when (event) {
+                          "TELEMETRY" -> {
+                              val parts = data.split("~", limit = 2)
+                              if (parts.size == 2) {
+                                  BluetoothMonitor.hostHeadsetReady = (parts[0] == "1")
+                                  val summaryPart = parts[1].substringAfter("| ", "")
+                                  if (summaryPart.isNotEmpty()) {
+                                      BluetoothMonitor.hostHeadsetSummary = summaryPart
+                                  }
+                              }
+                          }
                           "INCOMING" -> {
                               if (mode == "CLIENT") {
                                   HotspotLanBridge.send("INCOMING_ACK")
@@ -1079,7 +1295,13 @@ jobs:
                       val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                       val (rawNumber, resolvedName) = ContactHelper.resolveCallerInfo(this, callerPayload)
                       val displayTitle = resolvedName ?: rawNumber
-                      val displaySubText = if (resolvedName != null) "$rawNumber • Gelen Arama" else "Gelen Arama"
+                      val headsetReady = BluetoothMonitor.isAnyHeadsetReady(this)
+                      val warningSuffix = if (!headsetReady) " • ⚠️ KULAKLIK BAĞLI DEĞİL!" else ""
+                      val displaySubText = if (resolvedName != null) {
+                          "$rawNumber • Gelen Arama$warningSuffix"
+                      } else {
+                          "Gelen Arama$warningSuffix"
+                      }
 
                       val fullScreenIntent = Intent(this, RemoteCallActivity::class.java).apply {
                           flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -1190,7 +1412,6 @@ jobs:
                           acquire()
                       }
 
-                      // İnternetsiz Hotspot / Wi-Fi ağlarında UDP Broadcast keşfinin engellenmemesi için MulticastLock
                       try {
                           multicastLock = wifiManager.createMulticastLock("RemotePhone::MulticastLock").apply {
                               setReferenceCounted(false)
@@ -1201,7 +1422,9 @@ jobs:
 
                   override fun onDestroy() {
                       stopRingerAndVibration()
+                      HotspotLanBridge.stop()
                       HotspotLanBridge.removeListener(this)
+                      BluetoothMonitor.removeListener(this)
                       try { unregisterReceiver(screenWakeReceiver) } catch (_: Exception) {}
                       try {
                           val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -1256,12 +1479,10 @@ jobs:
               package com.example.remotephone
 
               import android.annotation.SuppressLint
-              import android.bluetooth.BluetoothAdapter
               import android.content.Context
               import android.content.Intent
               import android.media.AudioManager
               import android.net.Uri
-              import android.os.BatteryManager
               import android.os.Bundle
               import android.os.Handler
               import android.os.Looper
@@ -1321,19 +1542,16 @@ jobs:
                   override fun onCreate() {
                       super.onCreate()
                       instance = this
+                      BluetoothMonitor.init(this)
                       HotspotLanBridge.addListener(this)
 
                       handler.post(object : Runnable {
                           @SuppressLint("MissingPermission")
                           override fun run() {
                               if (HotspotLanBridge.isConnected) {
-                                  val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-                                  val pct = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
-                                  val btOn = BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
-                                  val btStatus = if (btOn) "Kulaklık: Hazır" else "BT: Kapalı"
-                                  HotspotLanBridge.send("TELEMETRY", "Note 10 Lite Pil: %$pct | $btStatus")
+                                  BridgeKeepAliveService.instance?.sendHostTelemetry()
                               }
-                              handler.postDelayed(this, 15_000L)
+                              handler.postDelayed(this, 12_000L)
                           }
                       })
                   }
@@ -1345,18 +1563,31 @@ jobs:
                       super.onDestroy()
                   }
 
+                  fun onBluetoothHeadsetReconnected() {
+                      val c = activeCall ?: return
+                      if (c.state == Call.STATE_ACTIVE || c.state == Call.STATE_DIALING) {
+                          val hs = BluetoothMonitor.getLocalHeadsetStatus(this)
+                          if (hs.isReady) {
+                              routeAudioToBluetoothOrEarpiece()
+                              HotspotLanBridge.send("BT_ROUTED", hs.summaryText)
+                          }
+                      }
+                  }
+
                   @SuppressLint("MissingPermission")
                   private fun routeAudioToBluetoothOrEarpiece() {
                       try {
                           val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
                           am?.mode = AudioManager.MODE_IN_COMMUNICATION
-                          val btEnabled = BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
-                          if (btEnabled) {
+                          val hs = BluetoothMonitor.getLocalHeadsetStatus(this)
+                          if (hs.isReady) {
                               am?.isBluetoothScoOn = true
                               am?.startBluetoothSco()
                               setAudioRoute(CallAudioState.ROUTE_BLUETOOTH)
+                              HotspotLanBridge.send("BT_ROUTED", hs.summaryText)
                           } else {
                               setAudioRoute(CallAudioState.ROUTE_EARPIECE)
+                              HotspotLanBridge.send("BT_MISSING", "⚠️ Kulaklık Bağlı Değil! Ses Note 10 Lite üzerinde.")
                           }
                       } catch (_: Exception) {
                           try { setAudioRoute(CallAudioState.ROUTE_EARPIECE) } catch (_: Exception) {}
@@ -1412,6 +1643,8 @@ jobs:
                       wasCallAnswered = false
                       wasRejectedByUser = false
                       incomingAckReceived = false
+
+                      BridgeKeepAliveService.instance?.sendHostTelemetry()
 
                       call.registerCallback(object : Call.Callback() {
                           override fun onStateChanged(call: Call, state: Int) {
@@ -1497,6 +1730,15 @@ jobs:
                       HotspotLanBridge.send("CONNECTED")
                   }
 
+                  fun playLocalDtmf(digit: Char) {
+                      try {
+                          activeCall?.playDtmfTone(digit)
+                          handler.postDelayed({
+                              try { activeCall?.stopDtmfTone() } catch (_: Exception) {}
+                          }, 160)
+                      } catch (_: Exception) {}
+                  }
+
                   fun setLocalSpeaker(enabled: Boolean) {
                       if (enabled) {
                           setAudioRoute(CallAudioState.ROUTE_SPEAKER)
@@ -1533,19 +1775,26 @@ jobs:
               import android.graphics.Color
               import android.media.AudioFocusRequest
               import android.media.AudioManager
+              import android.media.ToneGenerator
               import android.os.Build
               import android.os.Bundle
               import android.os.PowerManager
               import android.os.SystemClock
+              import android.os.VibrationEffect
+              import android.os.Vibrator
+              import android.view.Gravity
               import android.view.View
+              import android.widget.Button
               import android.widget.Chronometer
+              import android.widget.GridLayout
               import android.widget.LinearLayout
               import android.widget.Space
               import android.widget.TextView
+              import androidx.appcompat.app.AlertDialog
               import androidx.appcompat.app.AppCompatActivity
               import com.google.android.material.button.MaterialButton
 
-              class RemoteCallActivity : AppCompatActivity(), HotspotLanBridge.Listener {
+              class RemoteCallActivity : AppCompatActivity(), HotspotLanBridge.Listener, BluetoothMonitor.Listener {
 
                   private var proximityWakeLock: PowerManager.WakeLock? = null
                   private var audioFocusRequest: AudioFocusRequest? = null
@@ -1558,6 +1807,7 @@ jobs:
 
                   private lateinit var tvCallerNumber: TextView
                   private lateinit var tvCallStatus: TextView
+                  private lateinit var tvWarningBanner: TextView
                   private lateinit var chronometer: Chronometer
                   private lateinit var layoutInCallControls: LinearLayout
                   private lateinit var btnAnswer: MaterialButton
@@ -1567,6 +1817,7 @@ jobs:
                   override fun onCreate(savedInstanceState: Bundle?) {
                       super.onCreate(savedInstanceState)
                       setContentView(R.layout.activity_remote_call)
+                      BluetoothMonitor.init(this)
 
                       isOutgoingCall = intent.getBooleanExtra("IS_OUTGOING", false)
                       isLocalFallback = intent.getBooleanExtra("IS_LOCAL_FALLBACK", false)
@@ -1578,12 +1829,14 @@ jobs:
 
                       tvCallerNumber = findViewById(R.id.tvCallerNumber)
                       tvCallStatus = findViewById(R.id.tvCallStatus)
+                      tvWarningBanner = findViewById(R.id.tvWarningBanner)
                       chronometer = findViewById(R.id.chronometerCallTimer)
                       layoutInCallControls = findViewById(R.id.layoutInCallControls)
                       btnAnswer = findViewById(R.id.btnAnswer)
                       btnReject = findViewById(R.id.btnReject)
                       spaceBetween = findViewById(R.id.spaceBetweenCallButtons)
                       val btnMute = findViewById<MaterialButton>(R.id.btnMute)
+                      val btnKeypad = findViewById<MaterialButton>(R.id.btnKeypad)
                       val btnSpeaker = findViewById<MaterialButton>(R.id.btnSpeaker)
 
                       tvCallerNumber.text = if (!resolvedContactName.isNullOrEmpty()) {
@@ -1594,16 +1847,20 @@ jobs:
 
                       acquireProximitySensorLock()
                       HotspotLanBridge.addListener(this)
+                      BluetoothMonitor.addListener(this)
 
                       if (isOutgoingCall) {
                           requestAutoPauseMedia()
-                          updateStatusText("Aranıyor (Bluetooth Kulaklığa Yönlendirildi)...")
+                          val hsSummary = BluetoothMonitor.getCombinedHeadsetSummary(this)
+                          updateStatusText("Aranıyor ($hsSummary)...")
                           btnAnswer.visibility = View.GONE
                           spaceBetween.visibility = View.GONE
                           layoutInCallControls.visibility = View.VISIBLE
                       } else {
                           updateStatusText("Gelen arama...")
                       }
+
+                      evaluateHeadsetAndConnectionWarnings()
 
                       btnMute.setOnClickListener {
                           isMuted = !isMuted
@@ -1616,6 +1873,10 @@ jobs:
                           btnMute.setTextColor(if (isMuted) Color.parseColor("#0F1115") else Color.parseColor("#FFFFFF"))
                       }
 
+                      btnKeypad.setOnClickListener {
+                          showInCallDtmfDialog()
+                      }
+
                       btnSpeaker.setOnClickListener {
                           isSpeakerOn = !isSpeakerOn
                           if (isLocalFallback) {
@@ -1625,6 +1886,7 @@ jobs:
                           }
                           btnSpeaker.setBackgroundColor(if (isSpeakerOn) Color.parseColor("#8AB4F8") else Color.parseColor("#282C34"))
                           btnSpeaker.setTextColor(if (isSpeakerOn) Color.parseColor("#0F1115") else Color.parseColor("#FFFFFF"))
+                          evaluateHeadsetAndConnectionWarnings()
                       }
 
                       btnAnswer.setOnClickListener {
@@ -1636,7 +1898,7 @@ jobs:
                               HostInCallService.instance?.answerLocalCall()
                               switchToActiveCallUi()
                           } else {
-                              updateStatusText("Bağlanıyor (Bluetooth Aktif)...")
+                              updateStatusText("Bağlanıyor...")
                               HotspotLanBridge.send("ANSWER")
                               switchToActiveCallUi()
                           }
@@ -1654,6 +1916,97 @@ jobs:
                           }
                           cleanupAndFinish()
                       }
+                  }
+
+                  override fun onHeadsetStateChanged(status: HeadsetStatus) {
+                      runOnUiThread { evaluateHeadsetAndConnectionWarnings() }
+                  }
+
+                  private fun showInCallDtmfDialog() {
+                      val container = LinearLayout(this).apply {
+                          orientation = LinearLayout.VERTICAL
+                          setPadding(32, 24, 32, 16)
+                      }
+                      val tvTyped = TextView(this).apply {
+                          textSize = 24f
+                          setTextColor(Color.WHITE)
+                          gravity = Gravity.CENTER
+                          setPadding(0, 0, 0, 20)
+                      }
+                      container.addView(tvTyped)
+
+                      val grid = GridLayout(this).apply {
+                          columnCount = 3
+                          rowCount = 4
+                      }
+                      val digits = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#")
+                      for (d in digits) {
+                          val btn = Button(this).apply {
+                              text = d
+                              textSize = 20f
+                              layoutParams = GridLayout.LayoutParams().apply {
+                                  width = 0
+                                  height = 140
+                                  columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                                  setMargins(8, 8, 8, 8)
+                              }
+                              setOnClickListener {
+                                  tvTyped.append(d)
+                                  if (isLocalFallback) {
+                                      HostInCallService.instance?.playLocalDtmf(d[0])
+                                  } else {
+                                      HotspotLanBridge.send("DTMF", d)
+                                  }
+                              }
+                          }
+                          grid.addView(btn)
+                      }
+                      container.addView(grid)
+
+                      AlertDialog.Builder(this)
+                          .setTitle("Tuş Takımı (DTMF)")
+                          .setView(container)
+                          .setNegativeButton("Kapat", null)
+                          .show()
+                  }
+
+                  private fun evaluateHeadsetAndConnectionWarnings() {
+                      if (!isLocalFallback && !HotspotLanBridge.isConnected) {
+                          tvWarningBanner.visibility = View.VISIBLE
+                          tvWarningBanner.setBackgroundColor(Color.parseColor("#5C1E1E"))
+                          tvWarningBanner.setTextColor(Color.parseColor("#FFB4AB"))
+                          tvWarningBanner.text = "⚠️ Note 10 Lite ile Bağlantı Koptu! Yeniden bağlanmaya çalışılıyor..."
+                          playWarningAlertTone()
+                          return
+                      }
+
+                      val headsetReady = BluetoothMonitor.isAnyHeadsetReady(this)
+                      if (!headsetReady && !isSpeakerOn) {
+                          tvWarningBanner.visibility = View.VISIBLE
+                          tvWarningBanner.setBackgroundColor(Color.parseColor("#4D3800"))
+                          tvWarningBanner.setTextColor(Color.parseColor("#FFDF9E"))
+                          tvWarningBanner.text = if (!isOutgoingCall && btnAnswer.visibility == View.VISIBLE) {
+                              "⚠️ Bluetooth Kulaklık Bağlı Değil!\nYanıtlarsanız ses Note 10 Lite üzerinde açılır. Lütfen kulaklığınızı açın veya Hoparlör tuşunu kullanın."
+                          } else {
+                              "⚠️ Bluetooth Kulaklık Hazır Değil!\nSes şu an Note 10 Lite üzerinde. Kulaklığınızı açtığınız anda ses otomatik aktarılacaktır."
+                          }
+                          playWarningAlertTone()
+                      } else {
+                          tvWarningBanner.visibility = View.GONE
+                      }
+                  }
+
+                  private fun playWarningAlertTone() {
+                      try {
+                          val tg = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 85)
+                          tg.startTone(ToneGenerator.TONE_PROP_ACK, 220)
+                      } catch (_: Exception) {}
+                      try {
+                          val vib = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              vib?.vibrate(VibrationEffect.createOneShot(180, VibrationEffect.DEFAULT_AMPLITUDE))
+                          }
+                      } catch (_: Exception) {}
                   }
 
                   private fun requestAutoPauseMedia() {
@@ -1688,19 +2041,36 @@ jobs:
                       }
                   }
 
+                  override fun onConnectionChanged(connected: Boolean) {
+                      evaluateHeadsetAndConnectionWarnings()
+                  }
+
                   override fun onEvent(event: String, data: String) {
                       when (event) {
                           "CONNECTED" -> switchToActiveCallUi()
+                          "BT_ROUTED" -> {
+                              tvWarningBanner.visibility = View.GONE
+                              updateStatusText("Görüşme Aktif ($data)")
+                          }
+                          "BT_MISSING" -> {
+                              evaluateHeadsetAndConnectionWarnings()
+                              updateStatusText("Görüşme Aktif (Ahize / Kulaklık Yok)")
+                          }
+                          "TELEMETRY" -> {
+                              evaluateHeadsetAndConnectionWarnings()
+                          }
                           "ENDED", "MISSED" -> cleanupAndFinish()
                       }
                   }
 
                   private fun switchToActiveCallUi() {
                       BridgeKeepAliveService.stopIncomingRinging()
-                      updateStatusText("Görüşme Aktif (Bluetooth)")
+                      val hsSummary = BluetoothMonitor.getCombinedHeadsetSummary(this)
+                      updateStatusText("Görüşme Aktif ($hsSummary)")
                       btnAnswer.visibility = View.GONE
                       spaceBetween.visibility = View.GONE
                       layoutInCallControls.visibility = View.VISIBLE
+                      evaluateHeadsetAndConnectionWarnings()
                       if (chronometer.visibility != View.VISIBLE) {
                           chronometer.visibility = View.VISIBLE
                           chronometer.base = SystemClock.elapsedRealtime()
@@ -1729,6 +2099,7 @@ jobs:
 
                   override fun onDestroy() {
                       HotspotLanBridge.removeListener(this)
+                      BluetoothMonitor.removeListener(this)
                       releaseAutoPauseMedia()
                       try {
                           if (proximityWakeLock?.isHeld == true) proximityWakeLock?.release()
@@ -1775,13 +2146,13 @@ jobs:
               import androidx.core.content.ContextCompat
               import com.google.android.material.card.MaterialCardView
 
-              class MainActivity : AppCompatActivity(), HotspotLanBridge.Listener {
+              class MainActivity : AppCompatActivity(), HotspotLanBridge.Listener, BluetoothMonitor.Listener {
 
                   private var toneGenerator: ToneGenerator? = null
                   private lateinit var tvConnectionStatus: TextView
                   private lateinit var etDialNumber: EditText
                   private val NL = Char(10)
-                  private var lastTelemetryText: String = ""
+                  private var hostBatteryPart: String = ""
 
                   private val roleLauncher = registerForActivityResult(
                       ActivityResultContracts.StartActivityForResult()
@@ -1799,6 +2170,7 @@ jobs:
                   override fun onCreate(savedInstanceState: Bundle?) {
                       super.onCreate(savedInstanceState)
                       setContentView(R.layout.activity_main)
+                      BluetoothMonitor.init(this)
 
                       try {
                           toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, ToneGenerator.MAX_VOLUME)
@@ -1824,6 +2196,9 @@ jobs:
                           startKeepAliveService(savedMode)
                       }
 
+                      BluetoothMonitor.addListener(this)
+                      HotspotLanBridge.addListener(this)
+
                       btnToggleSettings.setOnClickListener {
                           cardSetupPanel.visibility =
                               if (cardSetupPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
@@ -1837,7 +2212,6 @@ jobs:
                       }
 
                       setupGoogleDialpad(etDialNumber)
-                      HotspotLanBridge.addListener(this)
 
                       findViewById<Button>(R.id.btnStartHost).setOnClickListener {
                           prefs.edit().putString("saved_mode", "HOST").apply()
@@ -1855,6 +2229,12 @@ jobs:
                           updateConnectionBanner(HotspotLanBridge.isConnected)
                       }
 
+                      // Tek Tuşla Köprüyü Kapat & Sistem Telefonuna Dön (Pil Tasarrufu)
+                      findViewById<Button>(R.id.btnDisableApp).setOnClickListener {
+                          disableBridgeAndRestoreSystemDialer()
+                          cardSetupPanel.visibility = View.GONE
+                      }
+
                       findViewById<Button>(R.id.btnMakeCall).setOnClickListener {
                           val targetNumber = etDialNumber.text.toString().trim()
                           if (targetNumber.isEmpty()) {
@@ -1865,6 +2245,62 @@ jobs:
                       }
 
                       handleIncomingIntent(intent)
+                  }
+
+                  override fun onHeadsetStateChanged(status: HeadsetStatus) {
+                      runOnUiThread { updateConnectionBanner(HotspotLanBridge.isConnected) }
+                  }
+
+                  private fun disableBridgeAndRestoreSystemDialer() {
+                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      prefs.edit().putString("saved_mode", "NONE").apply()
+
+                      // 1. Tüm soketleri, kalp atışı (heartbeat) ve arka plan servisini anında durdur, donanım kilitlerini bırak
+                      BridgeKeepAliveService.stopIncomingRinging()
+                      HotspotLanBridge.stop()
+                      stopService(Intent(this, BridgeKeepAliveService::class.java))
+
+                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      nm.cancelAll()
+
+                      updateConnectionBanner(false)
+
+                      // 2. Cihazda Varsayılan Telefon uygulaması olarak seçiliyse sistemin orijinal telefon uygulamasına geçiş ekranını aç
+                      val roleManager = getSystemService(Context.ROLE_SERVICE) as RoleManager
+                      if (roleManager.isRoleHeld(RoleManager.ROLE_DIALER)) {
+                          AlertDialog.Builder(this)
+                              .setTitle("🔋 Pil Tasarrufu Aktif Edildi")
+                              .setMessage(
+                                  "Arka plan köprü servisi, Wi-Fi taraması ve donanım kilitleri tamamen kapatıldı.\n\n" +
+                                  "Şimdi açılacak ekrandan 'Telefon uygulaması' seçeneğine dokunup telefonun kendi orijinal Arama uygulamasını seçerek sistem varsayılanına dönebilirsiniz."
+                              )
+                              .setPositiveButton("Varsayılan Telefonu Değiştir") { _, _ ->
+                                  openSystemDefaultAppsSettings()
+                              }
+                              .setNegativeButton("Daha Sonra", null)
+                              .show()
+                      } else {
+                          Toast.makeText(
+                              this,
+                              "🔋 Köprü ve arka plan servisleri tamamen kapatıldı (Pil tasarrufu aktif).",
+                              Toast.LENGTH_LONG
+                          ).show()
+                      }
+                  }
+
+                  private fun openSystemDefaultAppsSettings() {
+                      try {
+                          startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+                      } catch (_: Exception) {
+                          try {
+                              startActivity(
+                                  Intent(
+                                      Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                      Uri.parse("package:$packageName")
+                                  )
+                              )
+                          } catch (_: Exception) {}
+                      }
                   }
 
                   override fun onNewIntent(intent: Intent) {
@@ -1888,9 +2324,32 @@ jobs:
                       }
                   }
 
+                  private fun playErrorAlertFeedback() {
+                      try {
+                          toneGenerator?.stopTone()
+                          toneGenerator?.startTone(ToneGenerator.TONE_SUP_ERROR, 300)
+                      } catch (_: Exception) {}
+                      try {
+                          val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 180, 100, 180), -1))
+                          }
+                      } catch (_: Exception) {}
+                  }
+
                   private fun initiateCallAccordingToConnectionRule(targetNumber: String) {
                       val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
-                      val currentMode = prefs.getString("saved_mode", "CLIENT")
+                      val currentMode = prefs.getString("saved_mode", "NONE")
+
+                      if (currentMode == "NONE") {
+                          try {
+                              val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(targetNumber)))
+                              startActivity(dialIntent)
+                          } catch (_: Exception) {
+                              Toast.makeText(this, "Önce Kurulum menüsünden mod seçin", Toast.LENGTH_SHORT).show()
+                          }
+                          return
+                      }
 
                       if (currentMode == "HOST") {
                           if (!HotspotLanBridge.isConnected) {
@@ -1908,20 +2367,63 @@ jobs:
                                   Toast.LENGTH_LONG
                               ).show()
                           }
-                      } else {
-                          HotspotLanBridge.send("DIAL", targetNumber)
-                          val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
-                              putExtra("CALLER_NUMBER", targetNumber)
-                              putExtra("IS_OUTGOING", true)
-                              putExtra("IS_LOCAL_FALLBACK", false)
-                          }
-                          startActivity(callIntent)
+                          return
                       }
+
+                      if (!HotspotLanBridge.isConnected) {
+                          playErrorAlertFeedback()
+                          HotspotLanBridge.triggerScreenWakeRefresh(this)
+                          AlertDialog.Builder(this)
+                              .setTitle("⚠️ Note 10 Lite Bağlantısı Kopuk!")
+                              .setMessage(
+                                  "1. Telefon (Note 10 Lite) ile yerel Wi-Fi / Hotspot bağlantısı şu an kurulu değil.\n\n" +
+                                  "Arama başlatılamadı. Lütfen Wi-Fi veya Hotspot bağlantınızı kontrol edin (arka planda yeniden bağlanma tetiklendi)."
+                              )
+                              .setPositiveButton("Tekrar Bağlan") { _, _ ->
+                                  HotspotLanBridge.triggerScreenWakeRefresh(this)
+                              }
+                              .setNegativeButton("Tamam", null)
+                              .show()
+                          return
+                      }
+
+                      if (!BluetoothMonitor.isAnyHeadsetReady(this)) {
+                          playErrorAlertFeedback()
+                          AlertDialog.Builder(this)
+                              .setTitle("⚠️ Bluetooth Kulaklık Hazır Değil!")
+                              .setMessage(
+                                  "Bluetooth kulaklığınız şu an bağlı görünmüyor.\n\n" +
+                                  "Aramayı şimdi başlatırsanız ses Note 10 Lite üzerinde açılacaktır (kulaklığı sonradan açarsanız ses otomatik kulaklığa geçer).\n\n" +
+                                  "Yine de aramayı başlatmak istiyor musunuz?"
+                              )
+                              .setPositiveButton("Yine de Ara") { _, _ ->
+                                  startRemoteOutgoingCall(targetNumber)
+                              }
+                              .setNegativeButton("İptal (Kulaklığı Aç)", null)
+                              .show()
+                          return
+                      }
+
+                      startRemoteOutgoingCall(targetNumber)
+                  }
+
+                  private fun startRemoteOutgoingCall(targetNumber: String) {
+                      HotspotLanBridge.send("DIAL", targetNumber)
+                      val callIntent = Intent(this, RemoteCallActivity::class.java).apply {
+                          putExtra("CALLER_NUMBER", targetNumber)
+                          putExtra("IS_OUTGOING", true)
+                          putExtra("IS_LOCAL_FALLBACK", false)
+                      }
+                      startActivity(callIntent)
                   }
 
                   override fun onResume() {
                       super.onResume()
-                      HotspotLanBridge.triggerScreenWakeRefresh(this)
+                      val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
+                      if (prefs.getString("saved_mode", "NONE") != "NONE") {
+                          HotspotLanBridge.triggerScreenWakeRefresh(this)
+                      }
+                      updateConnectionBanner(HotspotLanBridge.isConnected)
                   }
 
                   private fun playStrongKeyFeedback(view: View, dtmfTone: Int) {
@@ -2070,25 +2572,33 @@ jobs:
                   private fun updateConnectionBanner(connected: Boolean) {
                       val prefs = getSharedPreferences("RemotePhonePrefs", Context.MODE_PRIVATE)
                       val mode = prefs.getString("saved_mode", "NONE")
+                      val hsSummary = BluetoothMonitor.getCombinedHeadsetSummary(this)
+
+                      if (mode == "NONE") {
+                          tvConnectionStatus.text = "⏸ Köprü Devre Dışı (Pil Tasarrufu Modu)"
+                          return
+                      }
+
                       if (connected) {
-                          val suffix = if (lastTelemetryText.isNotEmpty()) " | $lastTelemetryText" else ""
                           tvConnectionStatus.text = if (mode == "HOST") {
-                              "● S25 Ultra Bağlı (Sessiz Köprü Modu)"
+                              "● S25 Ultra Bağlı (Sessiz Köprü) | $hsSummary"
                           } else {
-                              "● Bağlı$suffix"
+                              val batInfo = if (hostBatteryPart.isNotEmpty()) " | $hostBatteryPart" else ""
+                              "● Bağlı$batInfo | $hsSummary"
                           }
                       } else {
                           tvConnectionStatus.text = if (mode == "HOST") {
                               "● Bağımsız Telefon Modu (S25 Ultra Bağlı Değil)"
                           } else {
-                              "● Bağlantı Bekleniyor..."
+                              "⚠️ Note 10 Lite Bağlantısı Kopuk! ($hsSummary)"
                           }
                       }
                   }
 
                   override fun onEvent(event: String, data: String) {
                       if (event == "TELEMETRY") {
-                          lastTelemetryText = data
+                          val rawText = data.substringAfter("~", data)
+                          hostBatteryPart = rawText.substringBefore(" | ").trim()
                           updateConnectionBanner(HotspotLanBridge.isConnected)
                       }
                   }
@@ -2214,6 +2724,7 @@ jobs:
 
                   override fun onDestroy() {
                       HotspotLanBridge.removeListener(this)
+                      BluetoothMonitor.removeListener(this)
                       toneGenerator?.release()
                       super.onDestroy()
                   }
@@ -2250,7 +2761,7 @@ jobs:
                               android:paddingVertical="10dp"
                               android:text="● Bağlantı Bekleniyor"
                               android:textColor="#8AB4F8"
-                              android:textSize="13sp"
+                              android:textSize="12sp"
                               android:textStyle="bold" />
 
                           <com.google.android.material.button.MaterialButton
@@ -2286,7 +2797,7 @@ jobs:
                               <TextView
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
-                                  android:text="Saf LAN Kontrol &amp; Bluetooth Modu"
+                                  android:text="Saf LAN Kontrol &amp; Bluetooth Modu (v4.6)"
                                   android:textColor="#8AB4F8"
                                   android:textSize="14sp"
                                   android:textStyle="bold" />
@@ -2295,7 +2806,7 @@ jobs:
                                   android:layout_width="wrap_content"
                                   android:layout_height="wrap_content"
                                   android:layout_marginTop="4dp"
-                                  android:text="Mobil veri kapalı olsa bile Hotspot veya Ortak Wi-Fi üzerinden kesintisiz çalışır."
+                                  android:text="Mobil veri kapalı olsa bile Hotspot/Wi-Fi üzerinden kesintisiz çalışır. Kullanmadığınızda pil tasarrufu için kapatabilirsiniz."
                                   android:textColor="#9AA0A6"
                                   android:textSize="12sp" />
 
@@ -2324,6 +2835,18 @@ jobs:
                                   android:text="2. Telefon (S25 Ultra) Olarak Ayarla"
                                   android:textColor="#FFFFFF"
                                   app:backgroundTint="#1E8E3E" />
+
+                              <Space
+                                  android:layout_width="match_parent"
+                                  android:layout_height="8dp" />
+
+                              <com.google.android.material.button.MaterialButton
+                                  android:id="@+id/btnDisableApp"
+                                  android:layout_width="match_parent"
+                                  android:layout_height="48dp"
+                                  android:text="⏹ Köprüyü Kapat &amp; Sistem Telefonuna Dön"
+                                  android:textColor="#FFFFFF"
+                                  app:backgroundTint="#B3261E" />
                           </LinearLayout>
                       </com.google.android.material.card.MaterialCardView>
 
@@ -2628,7 +3151,7 @@ jobs:
                   <com.google.android.material.card.MaterialCardView
                       android:layout_width="104dp"
                       android:layout_height="104dp"
-                      android:layout_marginTop="28dp"
+                      android:layout_marginTop="24dp"
                       app:cardBackgroundColor="#1C1F26"
                       app:cardCornerRadius="52dp"
                       app:cardElevation="0dp"
@@ -2647,11 +3170,11 @@ jobs:
                       android:id="@+id/tvCallerNumber"
                       android:layout_width="wrap_content"
                       android:layout_height="wrap_content"
-                      android:layout_marginTop="24dp"
+                      android:layout_marginTop="20dp"
                       android:gravity="center"
                       android:text="0555 000 00 00"
                       android:textColor="#FFFFFF"
-                      android:textSize="34sp"
+                      android:textSize="32sp"
                       android:textStyle="bold" />
 
                   <TextView
@@ -2662,7 +3185,7 @@ jobs:
                       android:gravity="center"
                       android:text="Gelen arama..."
                       android:textColor="#9AA0A6"
-                      android:textSize="18sp" />
+                      android:textSize="17sp" />
 
                   <Chronometer
                       android:id="@+id/chronometerCallTimer"
@@ -2671,6 +3194,20 @@ jobs:
                       android:layout_marginTop="8dp"
                       android:textColor="#81C995"
                       android:textSize="20sp"
+                      android:textStyle="bold"
+                      android:visibility="gone" />
+
+                  <TextView
+                      android:id="@+id/tvWarningBanner"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="16dp"
+                      android:background="#4D3800"
+                      android:gravity="center"
+                      android:padding="14dp"
+                      android:text="⚠️ Bluetooth Kulaklık Bağlı Değil!"
+                      android:textColor="#FFDF9E"
+                      android:textSize="14sp"
                       android:textStyle="bold"
                       android:visibility="gone" />
 
@@ -2683,7 +3220,7 @@ jobs:
                       android:id="@+id/layoutInCallControls"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:layout_marginBottom="36dp"
+                      android:layout_marginBottom="32dp"
                       android:gravity="center"
                       android:orientation="horizontal"
                       android:visibility="gone">
@@ -2691,30 +3228,45 @@ jobs:
                       <com.google.android.material.button.MaterialButton
                           android:id="@+id/btnMute"
                           style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="116dp"
-                          android:layout_height="72dp"
-                          android:layout_marginEnd="16dp"
+                          android:layout_width="96dp"
+                          android:layout_height="68dp"
+                          android:layout_marginEnd="8dp"
                           android:text="Sessiz"
                           android:textColor="#FFFFFF"
-                          android:textSize="16sp"
+                          android:textSize="14sp"
                           android:textStyle="bold"
                           app:backgroundTint="#282C34"
-                          app:cornerRadius="36dp"
+                          app:cornerRadius="34dp"
+                          app:strokeColor="#3A404D"
+                          app:strokeWidth="1dp" />
+
+                      <com.google.android.material.button.MaterialButton
+                          android:id="@+id/btnKeypad"
+                          style="@style/Widget.Material3.Button.TonalButton"
+                          android:layout_width="96dp"
+                          android:layout_height="68dp"
+                          android:layout_marginHorizontal="8dp"
+                          android:text="Tuşlar"
+                          android:textColor="#FFFFFF"
+                          android:textSize="14sp"
+                          android:textStyle="bold"
+                          app:backgroundTint="#282C34"
+                          app:cornerRadius="34dp"
                           app:strokeColor="#3A404D"
                           app:strokeWidth="1dp" />
 
                       <com.google.android.material.button.MaterialButton
                           android:id="@+id/btnSpeaker"
                           style="@style/Widget.Material3.Button.TonalButton"
-                          android:layout_width="116dp"
-                          android:layout_height="72dp"
-                          android:layout_marginStart="16dp"
+                          android:layout_width="96dp"
+                          android:layout_height="68dp"
+                          android:layout_marginStart="8dp"
                           android:text="Hoparlör"
                           android:textColor="#FFFFFF"
-                          android:textSize="16sp"
+                          android:textSize="14sp"
                           android:textStyle="bold"
                           app:backgroundTint="#282C34"
-                          app:cornerRadius="36dp"
+                          app:cornerRadius="34dp"
                           app:strokeColor="#3A404D"
                           app:strokeWidth="1dp" />
                   </LinearLayout>
@@ -2782,5 +3334,5 @@ jobs:
       - name: Upload Compiled APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RemotePhone-v4.4.0-APK
+          name: RemotePhone-v4.6.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
